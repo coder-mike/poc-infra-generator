@@ -1,0 +1,23 @@
+{
+  "name": "@coder-mike/poc-infra-generator",
+  "description": "Author: Michael Hunter\r License: MIT",
+  "version": "0.0.1",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coder-mike/poc-infra-generator.git"
+  },
+  "author": "Michael Hunter",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/coder-mike/poc-infra-generator/issues"
+  },
+  "homepage": "https://github.com/coder-mike/poc-infra-generator#readme",
+  "dependencies": {
+    "@tsconfig/node20": "^1.0.1",
+    "@types/node": "^20.3.1"
+  }
+}
