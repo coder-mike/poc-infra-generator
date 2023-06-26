@@ -1,20 +1,30 @@
 import { ID } from "./id";
 import fs from 'fs'
-import { File, assertBuildTime, defineFile, onBuild } from "./build-time";
+import { assertBuildTime } from "./build-time";
 import { assertStartupTime } from "./persona";
+import { BuildTimeFile } from "./build-time-file";
 
 /**
  * A key-value store which is only accessible at build time (backed by a file in
  * the build folder), to be used for storing values that need to be consistent
  * across multiple builds.
  */
-export class CompileTimeStore {
-  private file: File
-  private contents: { [key: string]: string };
+export class BuildTimeStore<T> {
+  private file: BuildTimeFile
+  private contents: { [key: string]: T } = {};
 
   constructor (public id: ID) {
     assertStartupTime();
-    this.file = defineFile(id);
+    this.file = new BuildTimeFile(id);
+  }
+
+  at(key: ID) {
+    return {
+      get: () => this.get(key),
+      set: (value: any) => this.set(key, value),
+      exists: () => this.has(key),
+      getOrInsert: (valueLazy: () => any) => this.getOrInsert(key, valueLazy)
+    }
   }
 
   get(key: ID): any {
@@ -23,7 +33,7 @@ export class CompileTimeStore {
     return this.contents[key.value]
   }
 
-  set(key: ID, value: any): void {
+  set(key: ID, value: T): void {
     value = JSON.parse(JSON.stringify(value));
     assertBuildTime();
     this.cacheContents();
@@ -37,7 +47,7 @@ export class CompileTimeStore {
     return this.contents.hasOwnProperty(key.value);
   }
 
-  getOrInsert<T>(key: ID, valueLazy: () => T): T {
+  getOrInsert(key: ID, valueLazy: () => T): T {
     assertBuildTime();
     if (this.has(key)) {
       return this.get(key);
@@ -48,11 +58,23 @@ export class CompileTimeStore {
     }
   }
 
+  keys(): string[] {
+    assertBuildTime();
+    this.cacheContents();
+    return Object.keys(this.contents);
+  }
+
+  values(): T[] {
+    assertBuildTime();
+    this.cacheContents();
+    return Object.values(this.contents);
+  }
+
   private cacheContents() {
     if (!this.contents) {
-      const filename = this.file.getFilename();
-      if (fs.existsSync(filename)) {
-        this.contents = JSON.parse(fs.readFileSync(filename, 'utf8'));
+      const filepath = this.file.filepath;
+      if (fs.existsSync(filepath)) {
+        this.contents = JSON.parse(fs.readFileSync(filepath, 'utf8'));
       } else {
         this.contents = Object.create(null);
       }
@@ -60,7 +82,8 @@ export class CompileTimeStore {
   }
 
   private flush() {
-    const filename = this.file.getFilename();
+    const filename = this.file.filepath;
+    this.file.forceDir();
     fs.writeFileSync(filename, JSON.stringify(this.contents));
   }
 }

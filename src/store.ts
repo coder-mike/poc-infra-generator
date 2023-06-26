@@ -1,17 +1,9 @@
 import assert from "assert";
 import { ID } from "./id";
 import { notImplemented } from "./utils";
-import { assertStartupTime } from "./persona";
-import { DockerService, defineDockerService, defineDockerVolume } from "./docker";
-import { definePassword } from "./password-store";
-
-export interface StoreOptions {
-  /**
-   * The store can either be instantiated in-memory, or it can run a postgres
-   * instance through docker-compose
-   */
-  mode?: 'in-memory' | 'docker-compose'
-}
+import { assertStartupTime, runningInProcess } from "./persona";
+import { DockerService, DockerVolume } from "./docker-compose";
+import { Password } from "./password-store";
 
 export interface StoreIndex<T> {
   // Retrieves all the items from the store that match the given index value
@@ -27,7 +19,6 @@ type IndexKey = string;
  * postgres docker instance or an in-memory data model.
  */
 export class Store<T = any> {
-  mode: 'in-memory' | 'docker-compose';
   indexes: Map<IndexId, {
     indexer: (value: T) => IndexKey[];
     inMemory: Map<IndexKey, Set<T>>;
@@ -35,20 +26,19 @@ export class Store<T = any> {
   inMemoryStore: Map<PrimaryKey, {
     value: T,
     indexKeys: Map<IndexId, IndexKey[]>
-  }>;
+  }> = new Map(); // Only if running in-process
 
-  postgresService: DockerService;
+  postgresService: DockerService = undefined as any; // Only used if running in docker
 
-  constructor (public id: ID, opts?: StoreOptions) {
+  constructor (public id: ID) {
     assertStartupTime();
 
-    this.mode = opts?.mode ?? 'in-memory';
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       this.inMemoryStore = new Map();
     } else {
-      const password = definePassword(id`password`);
-      const volume = defineDockerVolume(id`db_data`);
-      this.postgresService = defineDockerService(id, {
+      const password = new Password(id`password`);
+      const volume = new DockerVolume(id`db_data`);
+      this.postgresService = new DockerService(id, {
         dockerImage: 'postgres:latest',
         environment: {
           POSTGRES_PASSWORD: () => password.get()
@@ -68,7 +58,7 @@ export class Store<T = any> {
 
     return {
       get: async (indexKey: IndexKey): Promise<T[]> => {
-        if (this.mode === 'in-memory') {
+        if (runningInProcess) {
           return Array.from(inMemoryIndex.get(indexKey) ?? []);
         } else {
           notImplemented()
@@ -79,7 +69,7 @@ export class Store<T = any> {
 
   // Get a JSON value from the store. Returns undefined if the key is not found.
   async get(key: PrimaryKey): Promise<T | undefined> {
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       return this.getLocal(key);
     } else {
       notImplemented();
@@ -88,7 +78,7 @@ export class Store<T = any> {
 
   // Set a JSON value in the store, or pass undefined to delete the value
   async set(key: PrimaryKey, value: T | undefined): Promise<void> {
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       this.setLocal(key, value);
     } else {
       notImplemented()
@@ -97,7 +87,7 @@ export class Store<T = any> {
 
   // Delete an entry in the store. Does nothing if the key is not found.
   async del(key: PrimaryKey): Promise<void> {
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       this.delLocal(key);
     } else {
       notImplemented();
@@ -106,7 +96,7 @@ export class Store<T = any> {
 
   // Atomically modify an item in the store
   async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       // The in-memory store is already atomic
       const oldValue = this.getLocal(key);
       const newValue = fn(oldValue);
@@ -125,7 +115,7 @@ export class Store<T = any> {
   // included in the result.
   allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
     const batchSize = opts?.batchSize ?? 100;
-    if (this.mode === 'in-memory') {
+    if (runningInProcess) {
       return this.allKeysLocal(batchSize);
     } else {
       notImplemented();

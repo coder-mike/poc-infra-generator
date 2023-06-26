@@ -11,24 +11,29 @@ told to behave differently in each environment by telling it what persona to use
 distributed to each environment and then specializes its behavior according to
 the persona in that environment.
 
-There is also a special persona called "build" which is executed at build time.
-The build persona is meant to set up the IaC artifacts that lead to the
+There is also a special persona called `buildPersona` which is executed at build
+time. The build persona is meant to set up the IaC artifacts that lead to the
 setup and deployment of the other personas.
+
+And there is a special persona called `inProcessPersona` which various
+components will use to run in-process instead of creating the infra resources in
+which to run. The in-process persona is run if the entrypoint to the app is
+invoked without a persona ID. This is useful for testing and development since
+it will just run the whole distributed app.
 */
 
-import { ID } from "./id";
-
-export interface Persona {
-  id: ID;
-  host: PersonaHost;
-  entryPoint: () => void;
-}
+import assert from "assert";
+import { ID, idToSafeName, rootId } from "./id";
 
 const registeredPersonas: Record<string, Persona> = {};
 
 // Undefined if we're in the startup phase and so haven't started running the
 // current persona yet.
 export let currentPersona: Persona | undefined;
+
+// True if no persona has been specified (including the build persona), so we're
+// running everything in-process.
+export const runningInProcess = process?.env?.PERSONA === undefined;
 
 // The persona engine is the environment in which the persona is running. For
 export type PersonaHost =
@@ -37,22 +42,48 @@ export type PersonaHost =
   | 'build' // The persona is designed for a node.js process at build time (there is only one of these)
   | 'none' // The persona is non-executional in nature, such as a database server
 
-export function definePersona(id: ID, host: PersonaHost, entryPoint: () => void): Persona {
-  if (registeredPersonas.hasOwnProperty(id.value)) {
-    throw new Error(`Persona with ID ${id} already registered`);
-  }
+export class Persona {
+  environmentVariableName: string;
 
-  const persona: Persona = { id, entryPoint, host };
-  registeredPersonas[id.value] = persona;
-  return persona;
+  constructor (public id: ID, public host: PersonaHost, public entryPoint: () => void) {
+    this.environmentVariableName = idToSafeName(id);
+
+    if (registeredPersonas.hasOwnProperty(this.environmentVariableName)) {
+      throw new Error(`Persona with ID ${id} already registered (env ${this.environmentVariableName})`);
+    }
+    registeredPersonas[this.environmentVariableName] = this;
+  }
 }
 
-export function runPersona(id: ID): void {
-  const persona = registeredPersonas[id.value];
-  if (!persona) {
-    throw new Error(`No persona registered with ID ${id}`);
+export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', () => {
+  // the in-process persona is used for testing and development. It runs the
+  // application in the same process as the test or development environment.
+  // It works by executing all other persona entry points directly
+  for (const persona of Object.values(registeredPersonas)) {
+    persona.entryPoint();
   }
-  // The expectation is that personas are only run once, at the end of startup.
+});
+
+/**
+ * Called at the end of startup to run the persona identified by the
+ * the given ID or PERSONA environment variable.
+ */
+export function runPersona(id?: ID): void {
+  let environmentVariableName: string;
+  if (id) {
+    environmentVariableName = idToSafeName(id);
+  } else if (process.env.PERSONA) {
+    environmentVariableName = process.env.PERSONA;
+  } else {
+    assert(runningInProcess);
+    environmentVariableName = inProcessPersona.environmentVariableName;
+  }
+
+  const persona = registeredPersonas[environmentVariableName];
+  if (!persona) {
+    throw new Error(`No persona registered with environment variable name ${environmentVariableName}`);
+  }
+  // The expectation is that runPersona is only executed once, at the end of startup.
   if (currentPersona) {
     throw new Error(`Already running persona ${currentPersona.id}`);
   }
