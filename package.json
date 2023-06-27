@@ -4,9 +4,29 @@
   "version": "0.0.1",
   "main": "dist/index.js",
   "scripts": {
+    "// build": "Builds the library TypeScript (and example code)",
+    "build": "tsc",
+
+    "// build:watch": "Same as `build`, but watches for changes",
     "build:watch": "tsc -w",
-    "start-example-in-process": "ts-node src/example.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+
+    "// test": "Run mocha tests",
+    "test": "echo \"Error: no test specified\" && exit 1",
+
+    "// example:build": "Build the example, including TypeScript and docker",
+    "example:build": "npm run build && example:build:gen-infra && npm run example:build:docker",
+
+    "// example:build:gen-infra": "Code-generate the IaC for the example",
+    "example:build:gen-infra": "set PERSONA=build-infra && ts-node src/example.ts",
+
+    "// example:build:docker": "Build the docker images for the example",
+    "example:build:docker": "docker-compose -f build/docker-compose.yml build",
+
+    "// example:start:docker": "Start the docker containers for the example",
+    "example:start:docker": "docker-compose -f build/docker-compose.yml up",
+
+    "// example:start:in-process": "Run the example in-process without needing to build anything",
+    "example:start:in-process": "ts-node src/example.ts"
   },
   "repository": {
     "type": "git",

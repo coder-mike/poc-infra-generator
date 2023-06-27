@@ -28,9 +28,10 @@ export class ApiServer {
 
   constructor(id: ID) {
     assertStartupTime();
-    this.port = new Port(id);
+    this.port = new Port(id`port`);
     if (!runningInProcess) {
-      const service = onDeploy(id, () => setupExpressServer(this.endpoints, this.port))
+      const service = onDeploy(id, () => setupExpressServer(this.endpoints, this.port),
+        { ports: [this.port] })
       // docker-compose sets up a network where the service names are the hostnames.
       this.host = service.name;
     }
@@ -102,8 +103,8 @@ function clientWrapper({ route, method: verb }: EndpointInfo, host: string, port
   if (route[0] !== '/') {
     throw new Error(`Route must start with '/': ${route}`);
   }
-  const url = `http://${host}:${port.get()}${route}`;
   return async (payload: any) => {
+    const url = `http://${host}:${port.get()}${route}`;
     const response = await axios.request({
       url,
       method: verb,

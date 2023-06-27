@@ -43,15 +43,20 @@ export type PersonaHost =
   | 'none' // The persona is non-executional in nature, such as a database server
 
 export class Persona {
-  environmentVariableName: string;
+  environmentVariableValue: string;
 
-  constructor (public id: ID, public host: PersonaHost, public entryPoint: () => void) {
-    this.environmentVariableName = idToSafeName(id);
+  constructor (
+    public id: ID,
+    public host: PersonaHost,
+    public entryPoint: () => void,
+    opts?: { environmentVariableValue?: string }
+  ) {
+    this.environmentVariableValue = opts?.environmentVariableValue ?? idToSafeName(id);
 
-    if (registeredPersonas.hasOwnProperty(this.environmentVariableName)) {
-      throw new Error(`Persona with ID ${id} already registered (env ${this.environmentVariableName})`);
+    if (registeredPersonas.hasOwnProperty(this.environmentVariableValue)) {
+      throw new Error(`Persona with ID ${id} already registered (env ${this.environmentVariableValue})`);
     }
-    registeredPersonas[this.environmentVariableName] = this;
+    registeredPersonas[this.environmentVariableValue] = this;
   }
 }
 
@@ -81,10 +86,10 @@ export function runPersona(id?: ID): void {
       throw new Error(`No persona registered with ID ${id}`);
     }
   } else if (process.env.PERSONA) {
-    const environmentVariableName = process.env.PERSONA;
-    persona = registeredPersonas[environmentVariableName];
+    const environmentVariableValue = process.env.PERSONA.trim();
+    persona = registeredPersonas[environmentVariableValue];
     if (!persona) {
-      throw new Error(`No persona registered with environment variable name ${environmentVariableName}`);
+      throw new Error(`No persona registered ${environmentVariableValue}`);
     }
   } else {
     assert(runningInProcess);

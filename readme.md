@@ -94,17 +94,17 @@ To run this example:
 
 ```sh
 # Build the example. This also generates the docker files and docker-compose file
-npm run build-example
-cd build
+npm run example:build
+
 # Run the whole distributed system (client, server, and database)
-docker-compose up
+docker-compose -f build/docker-compose.yml up
 ```
 
 Or to run the whole example in-process instead of using docker:
 
 ```sh
 # Run everything in-process and in-memory. This is useful for debugging.
-npm run start-example-in-process
+npm run example:start:in-process
 ```
 
 ### Advantages demonstrated in this example
@@ -172,3 +172,4 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 ## Limitations of POC
 
 - There is no tear-down process implemented if a new deployment doesn't contain a persistent resource that a previous one did.
+- "Secrets" such as port numbers and passwords are currently given to every container, even if the container doesn't need it. A future version could be more selective.

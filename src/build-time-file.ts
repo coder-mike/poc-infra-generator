@@ -9,9 +9,12 @@ export class BuildTimeFile {
   public filepath: string;
   private dirCreated = false;
 
-  constructor (public id: ID, content?: () => string | Buffer) {
+  /**
+   * @param ext File extension including dot
+   */
+  constructor (public id: ID, ext?: string, content?: () => string | Buffer) {
     assertStartupTime();
-    const filepath = path.resolve('build', idToFilePath(id));
+    const filepath = path.resolve('build', idToFilePath(id) + ext);
     this.filepath = filepath;
     if (content) {
       onBuild(() => {

@@ -5,7 +5,7 @@ import { assertNever } from "./utils";
 
 export class DockerFile extends BuildTimeFile {
   constructor (id: ID, public instructions: DockerInstruction[]) {
-    super(id, () => generateDockerfile(instructions));
+    super(id, '', () => generateDockerfile(instructions));
   }
 }
 

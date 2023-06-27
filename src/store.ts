@@ -37,7 +37,7 @@ export class Store<T = any> {
       this.inMemoryStore = new Map();
     } else {
       const password = new Password(id`password`);
-      const volume = new DockerVolume(id`db_data`);
+      const volume = new DockerVolume(id`data`);
       this.postgresService = new DockerService(id, {
         dockerImage: 'postgres:latest',
         environment: {

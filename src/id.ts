@@ -74,18 +74,32 @@ export function idToUriPath(id: ID): string {
     .join('/');
 }
 
-// Generates a 32-character name that has no special characters except
-// underscore. It uses 16 characters for a hash and 16 characters for a
-// human-readable suffix which is derived from the end of the ID text.
+// Generates a 40-character name that has no special characters except
+// underscore. It uses at least 8 characters for a hash and the remaining
+// characters for a human-readable suffix which is derived from the end of the
+// ID text.
 export function idToSafeName(id: ID): string {
+  const totalLength = 40;
+  const minHashLength = 8;
+  const maxHashLength = 16; // Limit for readability
+
+  // Fit as many parts as we can, starting from the last one because the first
+  // ones are assumed to be more general such as the app name.
+  let nameStr = '';
+  const parts = [...id.parts];
+  let part = parts.pop();
+  while (part && nameStr.length + part.length <= totalLength - minHashLength - 1) {
+    nameStr = '_' + part.replace(/[^a-zA-Z0-9_]+/g, '_') + nameStr;
+    part = parts.pop();
+  }
+
+  // The rest we can fill up with hash
+  const hashLength = Math.min(totalLength - nameStr.length, maxHashLength);
   const hash = crypto.createHash('md5');
   hash.update(id.value, 'utf8');
-  const hashStr = hash.digest('hex').substring(0, 16);
+  const hashStr = hash.digest('hex').substring(0, hashLength);
 
-  const idWithoutSpecial = id.value.replace(/[^a-zA-Z0-9_]+/g, '_');
-  const suffix = idWithoutSpecial.substring(idWithoutSpecial.length - 16);
-
-  return hashStr + '_' + suffix;
+  return hashStr + nameStr;
 }
 
 function encodeIdPart(part: string): string {

@@ -15,7 +15,7 @@ export class BuildTimeStore<T> {
 
   constructor (public id: ID) {
     assertStartupTime();
-    this.file = new BuildTimeFile(id);
+    this.file = new BuildTimeFile(id, '.json');
   }
 
   at(key: ID) {
@@ -84,6 +84,6 @@ export class BuildTimeStore<T> {
   private flush() {
     const filename = this.file.filepath;
     this.file.forceDir();
-    fs.writeFileSync(filename, JSON.stringify(this.contents));
+    fs.writeFileSync(filename, JSON.stringify(this.contents, null, 4));
   }
 }
