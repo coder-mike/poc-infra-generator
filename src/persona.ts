@@ -56,10 +56,15 @@ export class Persona {
 }
 
 export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', () => {
-  // the in-process persona is used for testing and development. It runs the
+  // The in-process persona is used for testing and development. It runs the
   // application in the same process as the test or development environment.
   // It works by executing all other persona entry points directly
   for (const persona of Object.values(registeredPersonas)) {
+    // The build persona and in-process persona are special here. The assumption
+    // is that we don't need to run the infra-build persona if everything is
+    // in-process, since the build persona is solely for the purposes of
+    // building the infra.
+    if (persona === inProcessPersona || persona.host === 'build') continue;
     persona.entryPoint();
   }
 });
@@ -69,20 +74,23 @@ export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', 
  * the given ID or PERSONA environment variable.
  */
 export function runPersona(id?: ID): void {
-  let environmentVariableName: string;
+  let persona: Persona;
   if (id) {
-    environmentVariableName = idToSafeName(id);
+    persona = registeredPersonas[idToSafeName(id)];
+    if (!persona) {
+      throw new Error(`No persona registered with ID ${id}`);
+    }
   } else if (process.env.PERSONA) {
-    environmentVariableName = process.env.PERSONA;
+    const environmentVariableName = process.env.PERSONA;
+    persona = registeredPersonas[environmentVariableName];
+    if (!persona) {
+      throw new Error(`No persona registered with environment variable name ${environmentVariableName}`);
+    }
   } else {
     assert(runningInProcess);
-    environmentVariableName = inProcessPersona.environmentVariableName;
+    persona = inProcessPersona;
   }
 
-  const persona = registeredPersonas[environmentVariableName];
-  if (!persona) {
-    throw new Error(`No persona registered with environment variable name ${environmentVariableName}`);
-  }
   // The expectation is that runPersona is only executed once, at the end of startup.
   if (currentPersona) {
     throw new Error(`Already running persona ${currentPersona.id}`);

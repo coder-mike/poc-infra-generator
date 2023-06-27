@@ -42,9 +42,9 @@ interface ServiceInfo {
   }>;
 }
 
-const volumes: Record<string, DockerVolume> = Object.create(null)
-const services: Record<string, ServiceInfo> = Object.create(null)
-const secrets: Record<string, Lazy<string>> = Object.create(null)
+const volumes: Record<string, DockerVolume> = {}
+const services: Record<string, ServiceInfo> = {}
+const secrets: Record<string, Lazy<string>> = {}
 
 export class DockerVolume {
   public name: string;

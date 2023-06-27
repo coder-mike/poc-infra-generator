@@ -76,7 +76,7 @@ export class BuildTimeStore<T> {
       if (fs.existsSync(filepath)) {
         this.contents = JSON.parse(fs.readFileSync(filepath, 'utf8'));
       } else {
-        this.contents = Object.create(null);
+        this.contents = {};
       }
     }
   }

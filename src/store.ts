@@ -146,23 +146,25 @@ export class Store<T = any> {
     // Remove from old indexes
     this.delLocal(key);
 
-    // Insert into new indexes
-    const indexKeys = new Map<IndexId, IndexKey[]>();
-    for (const [indexId, index] of this.indexes.entries()) {
-      const keys = index.indexer(value);
-      for (const indexKey of keys) {
-        if (!index.inMemory.has(indexKey)) {
-          index.inMemory.set(indexKey, new Set());
+    if (value) {
+      // Insert into new indexes
+      const indexKeys = new Map<IndexId, IndexKey[]>();
+      for (const [indexId, index] of this.indexes.entries()) {
+        const keys = index.indexer(value);
+        for (const indexKey of keys) {
+          if (!index.inMemory.has(indexKey)) {
+            index.inMemory.set(indexKey, new Set());
+          }
+          // Add to index
+          index.inMemory.get(indexKey)!.add(value);
         }
-        // Add to index
-        index.inMemory.get(indexKey)!.add(value);
+        // Record in the store that we've added it to the index so we can remove
+        // it again later without searching the indexes.
+        indexKeys.set(indexId, keys);
       }
-      // Record in the store that we've added it to the index so we can remove
-      // it again later without searching the indexes.
-      indexKeys.set(indexId, keys);
-    }
 
-    this.inMemoryStore.set(key, { value, indexKeys });
+      this.inMemoryStore.set(key, { value, indexKeys });
+    }
   }
 
   private delLocal(key: PrimaryKey) {

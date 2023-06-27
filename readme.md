@@ -22,7 +22,7 @@ The following is an example that creates an Express API server called the "custo
 The following is aspirational, since the library is a WIP:
 
 ```ts
-import { rootId, Store, ApiServer, ID, runPersona,  } from 'libs/@coder-mike/poc-infra-generator';
+import { rootId, Store, ApiServer, ID, runPersona } from 'libs/@coder-mike/poc-infra-generator';
 
 interface Customer {
   id: string;
@@ -103,8 +103,6 @@ docker-compose up
 Or to run the whole example in-process instead of using docker:
 
 ```sh
-# Build the example. This also generates docker files but we won't use them
-npm run build-example
 # Run everything in-process and in-memory. This is useful for debugging.
 npm run start-example-in-process
 ```
