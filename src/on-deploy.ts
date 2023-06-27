@@ -43,7 +43,7 @@ export function onDeploy(id: ID, callback: () => void, opts?: { ports?: Port[] }
   if (path.extname(entryScript) === '.ts') {
     assert(entryScript.startsWith('src'));
     commands.push(
-      { op: 'COPY', src: '../src', dest: './src' },
+      { op: 'COPY', src: './src', dest: './src' },
       { op: 'CMD', command: 'npx', params: ['ts-node', entryScript] },
     );
   }
@@ -52,7 +52,7 @@ export function onDeploy(id: ID, callback: () => void, opts?: { ports?: Port[] }
     assert(path.extname(entryScript) === '.js');
     assert(entryScript.startsWith('dist'));
     commands.push(
-      { op: 'COPY', src: '../dist', dest: './dist' },
+      { op: 'COPY', src: './dist', dest: './dist' },
       { op: 'CMD', command: 'node', params: [entryScript] },
     );
   }

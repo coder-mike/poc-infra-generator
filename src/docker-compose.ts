@@ -10,9 +10,9 @@ import { Port } from './port';
 new BuildTimeFile(rootId('docker-compose'), '.yml', () =>
   yaml.dump({
     version: '3',
-    volumes: Object.values(volumes).map(volume => ({
-      [volume.name]: null,
-    })),
+    volumes: Object.fromEntries(Object.values(volumes).map(volume => [
+      volume.name, null
+    ])),
     services: Object.fromEntries(Object.entries(services).map(([serviceName, service]) => {
       const result: any = {};
 
@@ -20,8 +20,8 @@ new BuildTimeFile(rootId('docker-compose'), '.yml', () =>
         result.image = service.dockerImage;
       } else {
         result.build = {
-          context: '.', // Relative to the docker-compose.yml file
-          dockerfile: path.relative(path.resolve(process.cwd(), 'build'), service.dockerImage.filepath)
+          context: '..', // Relative to the project root
+          dockerfile: path.relative(process.cwd(), service.dockerImage.filepath)
             .replace(/\\/g, '/') // Fix for Windows pathnames
         }
       }

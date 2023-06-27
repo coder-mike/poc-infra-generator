@@ -17,7 +17,7 @@
     "example:build": "npm run build && example:build:gen-infra && npm run example:build:docker",
 
     "// example:build:gen-infra": "Code-generate the IaC for the example",
-    "example:build:gen-infra": "set PERSONA=build-infra && ts-node src/example.ts",
+    "example:build:gen-infra": "set PERSONA=build-infra && node dist/example.js",
 
     "// example:build:docker": "Build the docker images for the example",
     "example:build:docker": "docker-compose -f build/docker-compose.yml build",

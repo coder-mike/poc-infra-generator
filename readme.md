@@ -93,10 +93,12 @@ function createExampleClient(id: ID, server: CustomerServer) {
 To run this example:
 
 ```sh
-# Build the example. This also generates the docker files and docker-compose file
+# 1. Build the example. This also generates the docker files and docker-compose file
 npm run example:build
 
-# Run the whole distributed system (client, server, and database)
+# (2. Note: Please make sure docker desktop is running)
+
+# 3. Run the whole distributed system (client, server, and database)
 docker-compose -f build/docker-compose.yml up
 ```
 
