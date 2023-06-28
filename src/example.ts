@@ -68,13 +68,11 @@ function createExampleClient(id: ID, server: CustomerServer) {
   })
 }
 
-
-
 // ----------------------- Experiments ---------------------
 
 function temp_experiments() {
   new CliCommand(id`add`, 'add', async (args) => {
     const [a, b] = args.positional;
-    console.log(`${a} + ${b} = ${a + b}`);
+    console.log(`${a} + ${b} = ${parseFloat(a) + parseFloat(b)}`);
   });
 }

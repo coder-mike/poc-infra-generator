@@ -10,7 +10,9 @@ let cliPersona: Persona | undefined;
  * Entry point for a CLI command.
  *
  * @param parsedArgs The arguments parsed into simple key-value form with
- * remaining being positional arguments.
+ * remaining being positional arguments. The expected format for the key-value
+ * form is `--key=value` or `-key=value`. The form `--key` or `-key` on its own
+ * parses to `key: true`.
  * @param rawArgs The raw arguments as passed to the CLI, not including the
  * command string itself or anything before it.
  */
@@ -103,36 +105,38 @@ function listCommands() {
 }
 
 export type ParsedArgs = {
-  options: Record<string, string[]>,
+  named: Record<string, string | true>,
   positional: string[],
 };
 
 function parseCliArgs(args: string[]): ParsedArgs {
-  const options: Record<string, string[]> = {};
+  const named: Record<string, string | true> = {};
   const positional: string[] = [];
 
-  // Regular expression to match -arg=value or --arg=value
-  const optionPattern = /^-{1,2}([^=]+)=(.+)$/;
+  // Loop through all arguments passed
+  for (const arg of args) {
 
-  for (let arg of args) {
-    const match = optionPattern.exec(arg);
+    // Match arguments of the form '-arg=X' or '--arg=X'
+    const namedArgWithEqualsMatch = arg.match(/^--?([^=]+)=(.*)$/);
 
-    // If argument matches -arg=value or --arg=value
-    if (match) {
-      const key = match[1];
-      const value = match[2];
-
-      // If key already exists, append to the array, otherwise create a new array
-      if (options[key]) {
-        options[key].push(value);
-      } else {
-        options[key] = [value];
-      }
-    } else {
-      // Consider it as positional argument
-      positional.push(arg);
+    if (namedArgWithEqualsMatch) {
+      const [, key, value] = namedArgWithEqualsMatch;
+      named[key] = value;
+      continue;
     }
+
+    // Match arguments of the form '-arg' or '--arg'
+    const namedArgMatch = arg.match(/^--?.+$/);
+
+    if (namedArgMatch) {
+      const key = arg.slice(arg.startsWith("--") ? 2 : 1);
+      named[key] = true;
+      continue;
+    }
+
+    // Everything else is considered a positional argument
+    positional.push(arg);
   }
 
-  return { options, positional };
+  return { named, positional };
 }

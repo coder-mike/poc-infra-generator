@@ -6,9 +6,25 @@ import { assertStartupTime, Persona } from "./persona";
 import { Port } from "./port";
 import path from 'path';
 
-// Register a callback to be run when the system is deployed. Each callback is
-// run in a separate docker container.
-export function onDeploy(id: ID, callback: () => void, opts?: { ports?: Port[] }) {
+/**
+ * Register a callback to be run when the system is deployed. Each callback is
+ * run in a separate docker container (unless the system is running in-process).
+ *
+ * When running in-process, the callback is run at startup, along with all other
+ * callbacks registered with onDeploy. The system will wait for the callback to
+ * complete before starting the interactive CLI, if there is one. If the
+ * callback is intended to be a long-running background process, it's better to
+ * return an eager promise and then continue running in the background.
+ *
+ * If ports are specified, these are exposed on the host machine and forwarded
+ * to the container. This is required if you want to access the container from
+ * outside the docker-compose network (e.g. a CLI).
+ */
+export function onDeploy(
+  id: ID,
+  callback: () => void | Promise<void>,
+  opts?: { ports?: Port[] }
+) {
   assertStartupTime();
 
   /*
