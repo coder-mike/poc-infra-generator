@@ -1,2 +1,5 @@
 node_modules
 .git
+.vscode
+build
+.thoughts

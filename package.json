@@ -3,8 +3,9 @@
   "description": "Author: Michael Hunter\r License: MIT",
   "version": "0.0.1",
   "main": "dist/index.js",
+  "files": ["dist/**/*"],
   "scripts": {
-    "// build": "Builds the library TypeScript (and example code)",
+    "// build": "Builds the library TypeScript",
     "build": "tsc",
 
     "// build:watch": "Same as `build`, but watches for changes",
@@ -14,7 +15,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
 
     "// example:build": "Build the example, including TypeScript and docker",
-    "example:build": "npm run build && example:build:gen-infra && npm run example:build:docker",
+    "example:build": "npm run build && npm run example:build:gen-infra && npm run example:build:docker",
 
     "// example:build:gen-infra": "Code-generate the IaC for the example",
     "example:build:gen-infra": "set PERSONA=build-infra && node dist/example.js",
