@@ -3,9 +3,11 @@
 Author: Michael Hunter
 License: MIT
 
-This library is not production-ready. It is a proof of concept for a more modular way of developing distributed applications. It generates docker files and docker-compose files for you according to the resources you specify in the application. The docker-compose file is meant to be representative of some other hypothetical production-ready IaC output that would be used in a real version of this library.
+Infra Generator is a proof-of-concept library designed to streamline the creation and orchestration of distributed systems. Through its versatile architecture, developers can efficiently encapsulate components, leverage dependency injection, and maintain type-safety. The library provides tools to programmatically define infrastructure configuration, server logic, and client logic, while automatically generating necessary Docker and Docker Compose files to seamlessly deploy multiple architectural components.
 
-As of this writing, this library is a work in progress (WIP). It is not yet usable even as a proof of concept.
+## Disclaimer
+
+Please note that this library is a proof-of-concept and is not intended for production use. It is provided as-is, and the author makes no warranties regarding its functionality, completeness, or reliability. Use it at your own risk. The author shall not be responsible for any damages or loss resulting from the use of this library.
 
 ## Prerequisites
 
@@ -22,7 +24,7 @@ The following is an example that creates an Express API server called the "custo
 The following is aspirational, since the library is a WIP:
 
 ```ts
-import { rootId, Store, ApiServer, ID, runPersona } from 'libs/@coder-mike/poc-infra-generator';
+import { rootId, Store, ApiServer, ID, runPersona } from '@coder-mike/poc-infra-generator';
 
 interface Customer {
   id: string;
@@ -109,11 +111,13 @@ Or to run the whole example in-process instead of using docker:
 npm run example:start:in-process
 ```
 
+Note: it's recommended to also include a `.dockerignore` file in your project to prevent the `node_modules` directory from being copied into the docker containers. This will make the docker images smaller and faster to build.
+
 ### Advantages demonstrated in this example
 
 There are a few key points to highlight in this example before I explain it:
 
-- This example is a single script (representative of a single application) but contains code that executes in 3 different places: the client, the server, and build-time configuration of the infra.
+- This example is a single script (representative of a single application of many files) but contains code that executes in 3 different places: the client, the server, and build-time configuration of the infra.
 
 - The `db` in `createCustomerServer` is fully **encapsulated** -- it's a local variable that's not accessible to other parts of the system (e.g. the client). The pattern proposed in this POC makes encapsulation of infra components possible in a way that's a lot harder with traditional infra patterns (e.g. writing Terraform scripts).
 
@@ -169,9 +173,14 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 ## Limitations of approach
 
 - It's manual work to keep the startup sequence the same in every environment, including ID generation.
-- There is no compile-time mechanism to enforce that you call things at the right time. E.g. to stop you from calling `onDeploy` at runtime.
+- There is no compile-time mechanism to enforce that you call things at the right time. E.g. to stop you from calling `onDeploy` at runtime, or to indicate that you should only use `onDeploy` at build-time.
 
 ## Limitations of POC
 
+- The POC version of this library uses docker-compose as an IaC foundation, but this is not suitable for production purposes. A future version could use Terraform or some equivalent.
+
 - There is no tear-down process implemented if a new deployment doesn't contain a persistent resource that a previous one did.
+
 - "Secrets" such as port numbers and passwords are currently given to every container, even if the container doesn't need it. A future version could be more selective.
+
+- Similarly, this POC assumes that everything is accessible to everything on the network, which is not suitable for a production environment. A future version could be more restrictive. This could be as simple as having a `dependsOn` clause in each service to declare the injected dependencies, and then this can be used to auto-generate the network restrictions and environment variables.

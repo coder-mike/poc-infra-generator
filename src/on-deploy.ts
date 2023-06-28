@@ -36,23 +36,20 @@ export function onDeploy(id: ID, callback: () => void, opts?: { ports?: Port[] }
     { op: 'WORKDIR', path: '/usr/src/app' },
     { op: 'COPY', src: '../package*.json', dest: './' },
     { op: 'RUN', commands: ['npm install'] },
+    { op: 'COPY', src: '.', dest: '.' }, // Everything except what's in .dockerignore
   ]
 
   // Running under ts-node (note: this code path may be executed when running
   // in-process, but in case it isn't, we need to have sensible behavior).
   if (path.extname(entryScript) === '.ts') {
-    assert(entryScript.startsWith('src'));
     commands.push(
-      { op: 'COPY', src: './src', dest: './src' },
       { op: 'CMD', command: 'npx', params: ['ts-node', entryScript] },
     );
   }
   // Running under node
   else {
-    assert(path.extname(entryScript) === '.js');
-    assert(entryScript.startsWith('dist'));
+    assert(path.extname(entryScript) === '.js' || path.extname(entryScript) === '.mjs');
     commands.push(
-      { op: 'COPY', src: './dist', dest: './dist' },
       { op: 'CMD', command: 'node', params: [entryScript] },
     );
   }
