@@ -1,3 +1,4 @@
+import { CliCommand } from './cli-command';
 import { rootId, Store, ApiServer, ID, runPersona, onDeploy } from './index';
 
 interface Customer {
@@ -17,6 +18,8 @@ const server = createCustomerServer(id`customer-server`);
 
 // Create the client, with injected reference to server
 createExampleClient(id`example-client`, server);
+
+temp_experiments();
 
 // Run the persona defined by the current file
 runPersona();
@@ -63,4 +66,15 @@ function createExampleClient(id: ID, server: CustomerServer) {
 
     console.log(`Loaded customer: ${JSON.stringify(customer)}`);
   })
+}
+
+
+
+// ----------------------- Experiments ---------------------
+
+function temp_experiments() {
+  new CliCommand(id`add`, 'add', async (args) => {
+    const [a, b] = args.positional;
+    console.log(`${a} + ${b} = ${a + b}`);
+  });
 }

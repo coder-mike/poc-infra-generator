@@ -37,7 +37,8 @@ export const runningInProcess = process?.env?.PERSONA === undefined;
 
 // The persona engine is the environment in which the persona is running. For
 export type PersonaHost =
-  | 'node' // The persona is designed for a node.js process
+  | 'node' // The persona is designed for a node.js server process
+  | 'cli' // The persona is an interactive terminal
   | 'browser' // The persona is designed for the browser
   | 'build' // The persona is designed for a node.js process at build time (there is only one of these)
   | 'none' // The persona is non-executional in nature, such as a database server
@@ -48,7 +49,7 @@ export class Persona {
   constructor (
     public id: ID,
     public host: PersonaHost,
-    public entryPoint: () => void,
+    public entryPoint: () => void | Promise<void>,
     opts?: { environmentVariableValue?: string }
   ) {
     this.environmentVariableValue = opts?.environmentVariableValue ?? idToSafeName(id);
@@ -56,21 +57,44 @@ export class Persona {
     if (registeredPersonas.hasOwnProperty(this.environmentVariableValue)) {
       throw new Error(`Persona with ID ${id} already registered (env ${this.environmentVariableValue})`);
     }
+
+    // Only one CLI persona can be registered because when running in-process,
+    // there is no to decide which CLI persona to run.
+    if (host === 'cli' && Object.values(registeredPersonas).some(p => p.host === 'cli')) {
+      throw new Error(`CLI persona already registered by ${Object.values(registeredPersonas).find(p => p.host === 'cli')?.id}`);
+    }
+
     registeredPersonas[this.environmentVariableValue] = this;
   }
 }
 
-export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', () => {
+export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', async () => {
   // The in-process persona is used for testing and development. It runs the
   // application in the same process as the test or development environment.
-  // It works by executing all other persona entry points directly
-  for (const persona of Object.values(registeredPersonas)) {
-    // The build persona and in-process persona are special here. The assumption
-    // is that we don't need to run the infra-build persona if everything is
-    // in-process, since the build persona is solely for the purposes of
-    // building the infra.
-    if (persona === inProcessPersona || persona.host === 'build') continue;
-    persona.entryPoint();
+  // It works by executing all other persona entry points directly.
+  const personasToRun = Object.values(registeredPersonas)
+    .filter(p => p !== inProcessPersona && p.host === 'node');
+
+  const promises: Promise<any>[] = [];
+
+  for (const persona of personasToRun) {
+    // Note: if the persona is async, we run them in parallel
+    promises.push(Promise.resolve(persona.entryPoint())
+      .catch(console.error));
+  }
+
+  // Wait for other personas to finish initializing before running the CLI. This
+  // may including things such as database initialization etc that the CLI is
+  // dependent on. Also any console output from these processes could interfere
+  // with the CLI. For intentionally-long-running background processes, they can
+  // return an eager promise and then just continue running in the background.
+  await Promise.all(promises);
+
+  const cliPersona = Object.values(registeredPersonas).find(p => p.host === 'cli');
+  if (cliPersona) {
+    // The CLI persona is special because it's the only one that can be run
+    // interactively. So we run it last.
+    await cliPersona.entryPoint();
   }
 });
 
@@ -101,7 +125,8 @@ export function runPersona(id?: ID): void {
     throw new Error(`Already running persona ${currentPersona.id}`);
   }
   currentPersona = persona;
-  persona.entryPoint();
+  Promise.resolve(persona.entryPoint())
+    .catch(console.error);
 }
 
 // Assert that we're in the "startup" epoch, which is the epoch of the program

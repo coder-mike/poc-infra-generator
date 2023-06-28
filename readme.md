@@ -184,3 +184,5 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 - "Secrets" such as port numbers and passwords are currently given to every container, even if the container doesn't need it. A future version could be more selective.
 
 - Similarly, this POC assumes that everything is accessible to everything on the network, which is not suitable for a production environment. A future version could be more restrictive. This could be as simple as having a `dependsOn` clause in each service to declare the injected dependencies, and then this can be used to auto-generate the network restrictions and environment variables.
+
+- Indexer functions in the Store are assumed to be immutable. If you change the implementation of an indexer function, you need to change the ID of the indexer (e.g. appending a version number to the ID).
