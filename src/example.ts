@@ -75,4 +75,9 @@ function temp_experiments() {
     const [a, b] = args.positional;
     console.log(`${a} + ${b} = ${parseFloat(a) + parseFloat(b)}`);
   });
+  new CliCommand(id`load`, 'load', async (args) => {
+    const id = args.named['id'];
+    const customer = await server.getCustomer(id);
+    console.log(`Loaded customer: ${JSON.stringify(customer)}`);
+  });
 }

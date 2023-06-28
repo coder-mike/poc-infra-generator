@@ -105,7 +105,7 @@ function listCommands() {
 }
 
 export type ParsedArgs = {
-  named: Record<string, string | true>,
+  named: Record<string, any>,
   positional: string[],
 };
 
