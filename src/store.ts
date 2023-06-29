@@ -3,7 +3,7 @@ import { ID } from "./id";
 import { notImplemented } from "./utils";
 import { assertStartupTime, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
-import { Password } from "./password-store";
+import { Password } from "./password";
 
 export interface StoreIndex<T> {
   // Retrieves all the items from the store that match the given index value

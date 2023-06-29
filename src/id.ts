@@ -75,9 +75,9 @@ export function idToUriPath(id: ID): string {
 }
 
 // Generates a 40-character name that has no special characters except
-// underscore. It uses at least 8 characters for a hash and the remaining
-// characters for a human-readable suffix which is derived from the end of the
-// ID text.
+// underscore and starts with a letter (the letter `x` every time). It uses at
+// least 8 characters for a hex-encoded hash and the remaining characters for a
+// human-readable suffix which is derived from the end of the ID text.
 export function idToSafeName(id: ID): string {
   const totalLength = 39;
   const minHashLength = 8;
