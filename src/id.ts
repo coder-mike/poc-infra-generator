@@ -79,7 +79,7 @@ export function idToUriPath(id: ID): string {
 // characters for a human-readable suffix which is derived from the end of the
 // ID text.
 export function idToSafeName(id: ID): string {
-  const totalLength = 40;
+  const totalLength = 39;
   const minHashLength = 8;
   const maxHashLength = 16; // Limit for readability
 
@@ -99,7 +99,11 @@ export function idToSafeName(id: ID): string {
   hash.update(id.value, 'utf8');
   const hashStr = hash.digest('hex').substring(0, hashLength);
 
-  return hashStr + nameStr;
+  // The 'x' prefix is because some environments don't allow names to start with
+  // a number. Notably, I've had issues with assigning environment variables in
+  // Windows with names that start with a number. And of course variable names
+  // can't start with a number in many languages.
+  return 'x' + hashStr + nameStr;
 }
 
 function encodeIdPart(part: string): string {
