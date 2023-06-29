@@ -77,7 +77,7 @@ export function onDeploy(
   return new DockerService(id, {
     dockerImage,
     environment: {
-      PERSONA: () => persona.environmentVariableValue,
+      PERSONA: persona.environmentVariableValue,
     },
     ports: opts?.ports,
   })

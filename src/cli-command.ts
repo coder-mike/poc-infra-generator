@@ -1,7 +1,10 @@
+import { BuildTimeFile } from "./build-time-file";
 import { ID, rootId } from "./id";
 import { Persona, assertStartupTime } from "./persona";
 import * as readline from 'readline';
 import { parseArgsStringToArgv } from 'string-argv';
+import path from 'path';
+import assert from "assert";
 
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
@@ -29,6 +32,7 @@ export class CliCommand {
   ) {
     assertStartupTime();
     registerCliCommand(this);
+    createRuntimeWrapper(id, this);
   }
 }
 
@@ -139,4 +143,55 @@ function parseCliArgs(args: string[]): ParsedArgs {
   }
 
   return { named, positional };
+}
+
+function createRuntimeWrapper(id: ID, command: CliCommand) {
+  let entryScript = require.main && path.resolve(require.main.path, require.main.filename);
+  if (!entryScript) {
+    throw new Error('Could not determine app entry script');
+  }
+
+  // Entry script relative to the bin directory
+  entryScript = path.relative(path.join(process.cwd(), 'bin'), entryScript)
+
+  const persona = new Persona(id, 'node', () => {
+    // Note: only slicing 2, rather than 3, because the command argument isn't
+    // here.
+    const rawArgs = process.argv.slice(2);
+    const parsedArgs = parseCliArgs(rawArgs);
+    command.entryPoint(parsedArgs, rawArgs);
+  });
+
+  let runner: string;
+  // Running under ts-node
+  if (path.extname(entryScript) === '.ts') {
+    runner = 'npx ts-node'
+  }
+  // Running under node
+  else {
+    assert(path.extname(entryScript) === '.js' || path.extname(entryScript) === '.mjs');
+    runner = 'node';
+  }
+
+  new BuildTimeFile(id`win`, {
+    filepath: `bin/${command.command}.bat`,
+    content: `@echo off\nset PERSONA=${
+      persona.environmentVariableValue
+    }\ncall ${
+      runner
+    } "%~dp0${
+      entryScript.replace(/\//g, '\\')
+    }" %*`
+  });
+
+  new BuildTimeFile(id`nix`, {
+    filepath: `bin/${command.command}`,
+    content: `#!/bin/bash\n\nexport PERSONA=${
+      persona.environmentVariableValue
+    }\n${
+      runner
+    } "$(dirname "$0")/${
+      entryScript
+    }" "$@"`
+  });
 }

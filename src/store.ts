@@ -41,7 +41,7 @@ export class Store<T = any> {
       this.postgresService = new DockerService(id, {
         dockerImage: 'postgres:latest',
         environment: {
-          POSTGRES_PASSWORD: () => password.get()
+          POSTGRES_PASSWORD: password
         },
         volumeMounts: [{ volume, mountPath: '/var/lib/postgresql/data' }]
       })

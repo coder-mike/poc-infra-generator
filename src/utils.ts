@@ -9,9 +9,9 @@ export function unexpected(): never {
 }
 
 export function sha256(input: string): string {
-    const hash = crypto.createHash('sha256');
-    hash.update(input);
-    return hash.digest('hex');
+  const hash = crypto.createHash('sha256');
+  hash.update(input);
+  return hash.digest('hex');
 }
 
 export type Lazy<T> = () => T;

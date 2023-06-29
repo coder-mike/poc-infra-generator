@@ -1,11 +1,11 @@
-import { assertBuildTime } from "./build-time";
+import { BuildTimeValue } from "./build-time";
 import { BuildTimeFile } from "./build-time-file";
 import { ID } from "./id";
 import { assertNever } from "./utils";
 
 export class DockerFile extends BuildTimeFile {
   constructor (id: ID, public instructions: DockerInstruction[]) {
-    super(id, '', () => generateDockerfile(instructions));
+    super(id, { content: new BuildTimeValue(() => generateDockerfile(instructions)) });
   }
 }
 

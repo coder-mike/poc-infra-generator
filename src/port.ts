@@ -1,7 +1,8 @@
-import { assertBuildTime } from "./build-time";
+import { gitIgnorePath } from "./build-git-ignore";
+import { BuildTimeValue, assertBuildTime } from "./build-time";
 import { BuildTimeStore } from "./build-time-store";
-import { Secret } from "./docker-compose";
 import { ID, rootId } from "./id";
+import { Secret } from "./secret";
 
 // Only used when there's no existing build cache, otherwise look at
 // `nextPortNumber` in the `ports` file in the build folder.
@@ -10,6 +11,7 @@ const START_OF_PORT_RANGE = 35000;
 // Using a build time store to maintain some consistency of port numbers between
 // consecutive builds.
 const portStore = new BuildTimeStore(rootId('ports'))
+gitIgnorePath(portStore.filepath)
 
 // An element in the store which keeps track of the next port number to allocate
 const nextPortNumber = portStore.at(rootId('nextPortNumber'));
@@ -23,7 +25,7 @@ const nextPortNumber = portStore.at(rootId('nextPortNumber'));
 // build time or runtime in any persona.
 export class Port extends Secret<number> {
   constructor (id: ID) {
-    super(id, () => {
+    super(id, new BuildTimeValue(() => {
       // Port numbers are allocated at build time
       assertBuildTime();
       if (!nextPortNumber.exists()) {
@@ -38,7 +40,7 @@ export class Port extends Secret<number> {
       nextPortNumber.set(port + 1);
       portStore.set(id, port);
       return port;
-    });
+    }));
   }
 }
 

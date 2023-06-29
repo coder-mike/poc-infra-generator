@@ -15,8 +15,10 @@ export class BuildTimeStore<T> {
 
   constructor (public id: ID) {
     assertStartupTime();
-    this.file = new BuildTimeFile(id, '.json');
+    this.file = new BuildTimeFile(id, { ext: '.json' });
   }
+
+  get filepath() { return this.file.filepath; }
 
   at(key: ID) {
     return {
