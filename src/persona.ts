@@ -38,7 +38,8 @@ export const runningInProcess = process?.env?.PERSONA === undefined;
 // The persona engine is the environment in which the persona is running. For
 export type PersonaHost =
   | 'node' // The persona is designed for a node.js server process
-  | 'cli' // The persona is an interactive terminal
+  | 'cli' // The persona is an interactive terminal. There can be only one.
+  | 'cli-command' // The persona is a CLI command
   | 'browser' // The persona is designed for the browser
   | 'build' // The persona is designed for a node.js process at build time (there is only one of these)
   | 'none' // The persona is non-executional in nature, such as a database server

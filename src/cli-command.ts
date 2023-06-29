@@ -162,7 +162,7 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
   // Entry script relative to the bin directory
   entryScript = path.relative(path.join(process.cwd(), 'bin'), entryScript)
 
-  const persona = new Persona(id, 'node', () => {
+  const persona = new Persona(id, 'cli-command', () => {
     // Note: only slicing 2, rather than 3, because the command argument isn't
     // here.
     const rawArgs = process.argv.slice(2);

@@ -1,6 +1,6 @@
 import { ID, idToUriPath } from "./id";
 import { onDeploy } from "./on-deploy";
-import { assertStartupTime, runningInProcess } from "./persona";
+import { assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import express, { Request, Response, NextFunction } from 'express';
 import { json } from 'body-parser';
 import axios, { AxiosResponse } from 'axios';
@@ -104,7 +104,12 @@ function clientWrapper({ route, method: verb }: EndpointInfo, host: string, port
     throw new Error(`Route must start with '/': ${route}`);
   }
   return async (payload: any) => {
-    const url = `http://${host}:${port.get()}${route}`;
+    // The CLIs are run outside the docker container network, so they need to
+    // use localhost. The docker container network uses the service name as the
+    // hostname (running in docker-compose).
+    console.log(`Running in persona ${currentPersona?.id} (host ${currentPersona?.host})`)
+    const hostName = (currentPersona?.host === 'cli-command') ? 'localhost' : host;
+    const url = `http://${hostName}:${port.get()}${route}`;
     const response = await axios.request({
       url,
       method: verb,
