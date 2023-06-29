@@ -5,6 +5,8 @@ import * as readline from 'readline';
 import { parseArgsStringToArgv } from 'string-argv';
 import path from 'path';
 import assert from "assert";
+import { BuildTimeValue } from "./build-time";
+import { secrets } from "./secret";
 
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
@@ -35,6 +37,12 @@ export class CliCommand {
     createRuntimeWrapper(id, this);
   }
 }
+
+new BuildTimeFile(rootId('cli-dot-env'), {
+  content: new BuildTimeValue(() => Object.entries(secrets).map(([key, secret]) => `${key}=${secret.get()}`).join('\n')),
+  filepath: 'bin/.env'
+});
+
 
 function registerCliCommand(cliCommand: CliCommand) {
   assertStartupTime();
@@ -175,9 +183,9 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
 
   new BuildTimeFile(id`win`, {
     filepath: `bin/${command.command}.bat`,
-    content: `@echo off\nset PERSONA=${
+    content: `@echo off\nsetlocal\nset PERSONA=${
       persona.environmentVariableValue
-    }\ncall ${
+    }\n\nREM Load environment variables from .env file\nfor /f "usebackq tokens=*" %%a in (\`%~dp0\.env\`) do set %%a\n\nREM Run the node script\ncall ${
       runner
     } "%~dp0${
       entryScript.replace(/\//g, '\\')
@@ -188,7 +196,7 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
     filepath: `bin/${command.command}`,
     content: `#!/bin/bash\n\nexport PERSONA=${
       persona.environmentVariableValue
-    }\n${
+    }\n\n# Load environment variables from .env file\nset -a\nsource "$(dirname "$0")/.env"\nset +a\n\n# Run the node script\n${
       runner
     } "$(dirname "$0")/${
       entryScript
