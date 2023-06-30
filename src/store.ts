@@ -1,9 +1,11 @@
 import assert from "assert";
-import { ID } from "./id";
+import { ID, idToSafeName } from "./id";
 import { notImplemented } from "./utils";
-import { assertStartupTime, runningInProcess } from "./persona";
+import { assertNotStartup, assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
 import { Password } from "./password";
+import { Pool } from 'pg';
+import { Port } from "./port";
 
 export interface StoreIndex<T> {
   // Retrieves all the items from the store that match the given index value
@@ -19,41 +21,315 @@ type IndexKey = string;
  * postgres docker instance or an in-memory data model.
  */
 export class Store<T = any> {
-  indexes: Map<IndexId, {
-    indexer: (value: T) => IndexKey[];
-    inMemory: Map<IndexKey, Set<T>>;
-  }> = new Map();
-  inMemoryStore: Map<PrimaryKey, {
-    value: T,
-    indexKeys: Map<IndexId, IndexKey[]>
-  }> = new Map(); // Only if running in-process
-
-  postgresService: DockerService = undefined as any; // Only used if running in docker
+  private backingStore: InMemoryStore<T> | PostgresStore<T>;
 
   constructor (public id: ID) {
     assertStartupTime();
 
-    if (runningInProcess) {
-      this.inMemoryStore = new Map();
+    this.backingStore = runningInProcess
+      ? new InMemoryStore<T>(id)
+      : new PostgresStore<T>(id);
+  }
+
+  /**
+   * Define an index for the data
+   */
+  defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+    assertStartupTime();
+    return this.backingStore.defineIndex(id, indexer);
+  }
+
+  /**
+   * Get a JSON value from the store. Returns undefined if the key is not found.
+   */
+  get(key: PrimaryKey): Promise<T | undefined> {
+    assertRuntime();
+    return Promise.resolve(this.backingStore.get(key));
+  }
+
+  /**
+   * Check if a particular key is in the store
+   */
+  has(key: PrimaryKey): Promise<boolean> {
+    assertRuntime();
+    return Promise.resolve(this.backingStore.has(key));
+  }
+
+  /**
+   * Set a JSON value in the store, or pass undefined to delete the value
+   */
+  set(key: PrimaryKey, value: T | undefined): Promise<void> {
+    assertRuntime();
+    if (value === undefined) {
+      return Promise.resolve(this.backingStore.del(key));
     } else {
-      const password = new Password(id`password`);
-      const volume = new DockerVolume(id`data`);
-      this.postgresService = new DockerService(id, {
-        dockerImage: 'postgres:latest',
-        environment: {
-          POSTGRES_PASSWORD: password
-        },
-        volumeMounts: [{ volume, mountPath: '/var/lib/postgresql/data' }]
-      })
+      return Promise.resolve(this.backingStore.set(key, value));
     }
   }
 
+  /**
+   * Delete an entry in the store. Does nothing if the key is not found.
+   */
+  async del(key: PrimaryKey): Promise<void> {
+    assertRuntime();
+    return this.backingStore.del(key);
+  }
+
+  /**
+   * Atomically modify an item in the store
+   */
+  async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
+    assertRuntime();
+    return this.backingStore.modify(key, fn);
+  }
+
+  /**
+   * Enumerate all keys in the store, in batches. Note that new keys that are
+   * added during this process are not guaranteed to be included in the result,
+   * and keys deleted during this process are not guaranteed to be excluded. The
+   * only guarantee is that all keys that existed at the start of the process,
+   * that have not been deleted at any point during the process, will be
+   * included in the result.
+   */
+  allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
+    assertRuntime();
+    return this.backingStore.allKeys(opts);
+  }
+}
+
+class PostgresStore<T> {
+  private postgresService: DockerService;
+  private password: Password;
+  private externalPort: Port;
+  private databaseName: string;
+  private primaryTableName: string;
+  private volume: DockerVolume;
+  // Resolved promise if we're connected. Rejected promise if we couldn't
+  // connect. Pending promise if we're busy connecting. Undefined if we haven't
+  // tried to connect yet.
+  private postgresPool?: Promise<Pool>;
+
+  constructor (public id: ID) {
+    assertStartupTime();
+    this.password = new Password(id);
+    this.externalPort = new Port(id);
+    this.volume = new DockerVolume(id`data`);
+    this.databaseName = idToSafeName(id);
+    this.primaryTableName = idToSafeName(id);
+
+    this.postgresService = new DockerService(id, {
+      dockerImage: 'postgres:latest',
+      environment: {
+        POSTGRES_PASSWORD: this.password
+      },
+      ports: [{ internal: 5432, external: this.externalPort }],
+      volumeMounts: [{
+        volume: this.volume,
+        mountPath: '/var/lib/postgresql/data'
+      }]
+    })
+  }
+
   defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+    assertStartupTime();
+    notImplemented()
+  }
+
+  async get(key: PrimaryKey): Promise<T | undefined> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+    const result = await pool.query(
+      `SELECT value FROM ${this.primaryTableName} WHERE key = $1`, [key]);
+    if (result.rows.length === 0) {
+      return undefined;
+    }
+    return result.rows[0].value;
+  }
+
+  async has(key: PrimaryKey): Promise<boolean> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+    const result = await pool.query(
+      `SELECT EXISTS (SELECT 1 FROM ${this.primaryTableName} WHERE key = $1)`, [key]);
+    return result.rows[0].exists;
+  }
+
+  async set(key: PrimaryKey, value: T): Promise<void> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+    // PostgreSQL can directly accept JSON objects for jsonb columns.
+    await pool.query(
+      `INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
+      ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1`,
+      [key, value]
+    );
+  }
+
+  async del(key: PrimaryKey): Promise<void> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+    await pool.query(
+      `DELETE FROM ${this.primaryTableName} WHERE key = $1`, [key]);
+  }
+
+  async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+
+    // Start transaction
+    await pool.query('BEGIN');
+
+    try {
+      // Retrieve the existing value
+      const result = await pool.query(
+        `SELECT value FROM ${this.primaryTableName} WHERE key = $1 FOR UPDATE`, [key]);
+      const existingValue = result.rows.length > 0 ? result.rows[0].value : undefined;
+
+      // Apply the modification function
+      const newValue = fn(existingValue);
+
+      if (newValue === undefined) {
+        // Delete the record if the new value is undefined
+        await pool.query(`DELETE FROM ${this.primaryTableName} WHERE key = $1`, [key]);
+      } else {
+        // Update the record
+        await pool.query(
+          `INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
+          ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1`,
+          [key, newValue]
+        );
+      }
+
+      // Commit the transaction
+      await pool.query('COMMIT');
+      return newValue;
+
+    } catch (error) {
+      // Something went wrong, rollback the transaction
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+  }
+
+  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
+    assertRuntime();
+    const pool = await this.getOrCreatePool();
+    const batchSize = opts?.batchSize || 100; // default batch size of 100 if not specified
+
+    let lastKey: PrimaryKey | null = null;
+
+    while (true) {
+      // Retrieve the keys in batches
+      let result;
+      if (lastKey === null) {
+        result = await pool.query(
+          `SELECT key FROM ${this.primaryTableName} ORDER BY key ASC LIMIT $1`,
+          [batchSize]
+        );
+      } else {
+        result = await pool.query(
+          `SELECT key FROM ${this.primaryTableName} WHERE key > $1 ORDER BY key ASC LIMIT $2`,
+          [lastKey, batchSize]
+        );
+      }
+
+      const keys = result.rows.map(row => row.key) as PrimaryKey[];
+
+      // If no more keys, then exit the loop
+      if (keys.length === 0) {
+        break;
+      }
+
+      // Yield the batch of keys
+      yield keys;
+
+      // Remember the last key for the next query
+      lastKey = keys[keys.length - 1];
+    }
+  }
+
+  private getOrCreatePool(): Promise<Pool> {
+    assertRuntime();
+    if (!this.postgresPool) {
+      this.postgresPool = this.createPool();
+    }
+    return this.postgresPool;
+  }
+
+  private async createPool(): Promise<Pool> {
+    const startTime = Date.now();
+    const maxWaitTime = 30000; // 30 seconds in milliseconds
+    const baseDelay = 100; // base delay in milliseconds
+    let attempt = 0;
+
+    // A retry loop to connect to the database. This is necessary because the
+    // database may not be ready yet when the store is created, especially if
+    // the store is created in a docker-compose network where we're launching
+    // all the services roughly at the same time.
+    while (true) {
+      try {
+        // The port and hostname are different depending on whether we're running
+        // in a CLI on the docker-compose host or inside the docker-compose
+        // network.
+        const port = currentPersona!.region === 'inside-docker-network'
+          ? 5432
+          : this.externalPort!.get();
+        const host = currentPersona!.region === 'inside-docker-network'
+          ? this.postgresService.name
+          : 'localhost';
+        const user = 'postgres';
+        const password = this.password!.get();
+        const database = this.databaseName!;
+        // Initialize PostgreSQL connection pool
+        const postgresPool = new Pool({ host, port, user, password, database });
+
+        // Create the table if it doesn't exist.
+        const createTableQuery = `CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
+          key serial PRIMARY KEY,
+          value jsonb
+        )`;
+
+        await postgresPool.query(createTableQuery);
+
+        return postgresPool;
+      } catch (err) {
+        // Check if total wait time has exceeded 30 seconds
+        if (Date.now() - startTime > maxWaitTime) {
+          throw new Error('Could not connect to the database within 30 seconds');
+        }
+
+        // Exponential backoff with jitter
+        const delay = (Math.pow(2, attempt) + Math.random()) * baseDelay;
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        attempt++;
+      }
+    }
+  }
+}
+
+class InMemoryStore<T> {
+  private indexes: Map<IndexId, {
+    indexer: (value: T) => IndexKey[];
+    inMemory: Map<IndexKey, Set<T>>;
+  }> = new Map();
+  private data: Map<PrimaryKey, {
+    value: T,
+    indexKeys: Map<IndexId, IndexKey[]>
+  }> = new Map();
+
+  constructor (public id: ID) {
+    assertStartupTime();
+  }
+
+  defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+    assertStartupTime();
+
     if (this.indexes.has(id.value)) {
       throw new Error(`Index ${id.value} already defined`);
     }
 
-    const inMemoryIndex = new Map(); // Only used if in-memory mode
+    const inMemoryIndex = new Map();
     this.indexes.set(id.value, { indexer, inMemory: inMemoryIndex });
 
     return {
@@ -67,111 +343,51 @@ export class Store<T = any> {
     }
   }
 
-  // Get a JSON value from the store. Returns undefined if the key is not found.
-  async get(key: PrimaryKey): Promise<T | undefined> {
-    if (runningInProcess) {
-      return this.getLocal(key);
-    } else {
-      notImplemented();
-    }
+  get(key: PrimaryKey): T | undefined {
+    assertRuntime();
+    const entry = this.data.get(key);
+    return entry?.value
   }
 
-  // Set a JSON value in the store, or pass undefined to delete the value
-  async set(key: PrimaryKey, value: T | undefined): Promise<void> {
-    if (runningInProcess) {
-      this.setLocal(key, value);
-    } else {
-      notImplemented()
-    }
+  has(key: PrimaryKey): boolean {
+    assertRuntime();
+    return this.data.has(key)
   }
 
-  // Delete an entry in the store. Does nothing if the key is not found.
-  async del(key: PrimaryKey): Promise<void> {
-    if (runningInProcess) {
-      this.delLocal(key);
-    } else {
-      notImplemented();
-    }
-  }
-
-  // Atomically modify an item in the store
-  async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
-    if (runningInProcess) {
-      // The in-memory store is already atomic
-      const oldValue = this.getLocal(key);
-      const newValue = fn(oldValue);
-      this.setLocal(key, newValue);
-      return newValue;
-    } else {
-      notImplemented();
-    }
-  }
-
-  // Enumerate all keys in the store, in batches. Note that new keys that are
-  // added during this process are not guaranteed to be included in the result,
-  // and keys deleted during this process are not guaranteed to be excluded. The
-  // only guarantee is that all keys that existed at the start of the process,
-  // that have not been deleted at any point during the process, will be
-  // included in the result.
-  allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
-    const batchSize = opts?.batchSize ?? 100;
-    if (runningInProcess) {
-      return this.allKeysLocal(batchSize);
-    } else {
-      notImplemented();
-    }
-  }
-
-  private async *allKeysLocal(batchSize: number): AsyncIterableIterator<PrimaryKey[]> {
-    const keys = Array.from(this.inMemoryStore.keys());
-    for (let i = 0; i < keys.length; i += batchSize) {
-      yield keys.slice(i, i + batchSize);
-    }
-  }
-
-  private getLocal(key: PrimaryKey): T | undefined {
-    const entry = this.inMemoryStore.get(key);
-    return entry?.value;
-  }
-
-  private setLocal(key: string, value: T | undefined) {
-    if (value === undefined) {
-      this.delLocal(key);
-      return;
-    }
+  set(key: PrimaryKey, value: T): void {
+    assertRuntime();
 
     // Only JSON values are preserved in the store
     value = JSON.parse(JSON.stringify(value));
 
     // Remove from old indexes
-    this.delLocal(key);
+    this.del(key);
 
-    if (value) {
-      // Insert into new indexes
-      const indexKeys = new Map<IndexId, IndexKey[]>();
-      for (const [indexId, index] of this.indexes.entries()) {
-        const keys = index.indexer(value);
-        for (const indexKey of keys) {
-          if (!index.inMemory.has(indexKey)) {
-            index.inMemory.set(indexKey, new Set());
-          }
-          // Add to index
-          index.inMemory.get(indexKey)!.add(value);
+    // Insert into new indexes
+    const indexKeys = new Map<IndexId, IndexKey[]>();
+    for (const [indexId, index] of this.indexes.entries()) {
+      const keys = index.indexer(value);
+      for (const indexKey of keys) {
+        if (!index.inMemory.has(indexKey)) {
+          index.inMemory.set(indexKey, new Set());
         }
-        // Record in the store that we've added it to the index so we can remove
-        // it again later without searching the indexes.
-        indexKeys.set(indexId, keys);
+        // Add to index
+        index.inMemory.get(indexKey)!.add(value);
       }
-
-      this.inMemoryStore.set(key, { value, indexKeys });
+      // Record in the store that we've added it to the index so we can remove
+      // it again later without searching the indexes.
+      indexKeys.set(indexId, keys);
     }
+
+    this.data.set(key, { value, indexKeys });
   }
 
-  private delLocal(key: PrimaryKey) {
-    const original = this.inMemoryStore.get(key);
+  del(key: PrimaryKey): void {
+    assertRuntime();
+    const original = this.data.get(key);
 
     if (!original) {
-      return;
+      return undefined
     }
 
     // For each index in which the original object appears
@@ -189,6 +405,35 @@ export class Store<T = any> {
       }
     }
 
-    this.inMemoryStore.delete(key);
+    this.data.delete(key);
+
+    return undefined
+  }
+
+  modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): T | undefined {
+    assertRuntime();
+    // The in-memory store is already atomic
+    const oldValue = this.get(key);
+    const newValue = fn(oldValue);
+    if (newValue === undefined) {
+      this.del(key);
+    } else {
+      this.set(key, newValue);
+    }
+    return newValue;
+  }
+
+  // Enumerate all keys in the store, in batches. Note that new keys that are
+  // added during this process are not guaranteed to be included in the result,
+  // and keys deleted during this process are not guaranteed to be excluded. The
+  // only guarantee is that all keys that existed at the start of the process,
+  // that have not been deleted at any point during the process, will be
+  // included in the result.
+  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
+    const batchSize = opts?.batchSize ?? 100;
+    const keys = Array.from(this.data.keys());
+    for (let i = 0; i < keys.length; i += batchSize) {
+      yield keys.slice(i, i + batchSize);
+    }
   }
 }

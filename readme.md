@@ -175,7 +175,8 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 ## Limitations of approach
 
 - It's manual work to keep the startup sequence the same in every environment, including ID generation.
-- There is no compile-time mechanism to enforce that you call things at the right time. E.g. to stop you from calling `onDeploy` at runtime, or to indicate that you should only use `onDeploy` at build-time.
+
+- There is no compile-time mechanism to enforce that you call things at the right time. E.g. to stop you from calling `onDeploy` at runtime, or to indicate that you should only use `onDeploy` at build-time. This is mitigated a bit by calling `assertStartup`, `assertRuntime`, etc. at the start of each function, as a check but also as an indication to the reader of the intended location of the execution, but this is not enforced by the compiler.
 
 ## Limitations of POC
 

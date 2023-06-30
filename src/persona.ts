@@ -24,6 +24,7 @@ it will just run the whole distributed app.
 
 import assert from "assert";
 import { ID, idToSafeName, rootId } from "./id";
+import { assertNever, unexpected } from "./utils";
 
 const registeredPersonas: Record<string, Persona> = {};
 
@@ -43,6 +44,10 @@ export type PersonaHost =
   | 'browser' // The persona is designed for the browser
   | 'build' // The persona is designed for a node.js process at build time (there is only one of these)
   | 'none' // The persona is non-executional in nature, such as a database server
+
+export type Region =
+  | 'inside-docker-network' // The persona is running inside the docker-compose network
+  | 'localhost' // The persona is running on the host machine, outside the docker network
 
 export class Persona {
   environmentVariableValue: string;
@@ -66,6 +71,19 @@ export class Persona {
     }
 
     registeredPersonas[this.environmentVariableValue] = this;
+  }
+
+  get region(): 'inside-docker-network' | 'localhost' {
+    assertRuntime();
+    switch (this.host) {
+      case 'node-daemon': return 'inside-docker-network';
+      case 'cli': return 'localhost';
+      case 'cli-command': return 'localhost';
+      case 'browser': throw new Error(`Browser persona ${this.id} not supported`);
+      case 'build': unexpected(); // Because we already asserted that we're at runtime
+      case 'none': unexpected(); // Because code is calling this method, so there must be a host to execute it
+      default: assertNever(this.host)
+    }
   }
 }
 
@@ -143,5 +161,11 @@ export function assertStartupTime() {
 export function assertNotStartup() {
   if (!currentPersona) {
     throw new Error('This function is not meant to be executed at startup');
+  }
+}
+
+export function assertRuntime() {
+  if (!currentPersona || currentPersona.host === 'build') {
+    throw new Error(`This function can only be called at runtime`);
   }
 }

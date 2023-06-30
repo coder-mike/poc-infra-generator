@@ -49,8 +49,15 @@ const dockerComposeFile = new BuildTimeFile(rootId('docker-compose'), {
         }
 
         if (service.ports) {
-          // Note: the port mapping here assumes the same port in the container as outside
-          result.ports = service.ports.map(port => `${port.get()}:${port.get()}`);
+          const ports: string[] = [];
+          for (const port of service.ports) {
+            if (isPortLike(port)) {
+              ports.push(`${getPort(port)}:${getPort(port)}`);
+            } else {
+              ports.push(`${getPort(port.external)}:${getPort(port.internal)}`);
+            }
+          }
+          result.ports = ports;
         }
 
         return [serviceName, result]
@@ -61,6 +68,11 @@ const dockerComposeFile = new BuildTimeFile(rootId('docker-compose'), {
 // The docker-compose file contains all the temporary passwords
 gitIgnorePath(dockerComposeFile.filepath);
 
+type PortLike = number | Port;
+const getPort = (portLike: PortLike) => typeof portLike === 'number' ? portLike : portLike.get();
+type PortMapping = PortLike | { internal: PortLike, external: PortLike };
+const isPortLike = (port: PortMapping): port is PortLike => typeof port === 'string' || port instanceof Port;
+
 interface ServiceInfo {
   dockerImage: string | BuildTimeFile;
   environment?: { [key: string]: BuildTimeValueOr<string> };
@@ -68,7 +80,7 @@ interface ServiceInfo {
     volume: DockerVolume,
     mountPath: string,
   }>;
-  ports?: Port[];
+  ports?: PortMapping[];
 }
 
 const volumes: Record<string, DockerVolume> = {}
