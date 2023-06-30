@@ -40,7 +40,7 @@ export function onDeploy(
     throw new Error('Could not determine app entry script');
   }
 
-  const persona = new Persona(id, 'node', callback);
+  const persona = new Persona(id, 'node-daemon', callback);
 
   entryScript = path.relative(process.cwd(), entryScript)
 

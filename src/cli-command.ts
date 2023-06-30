@@ -1,12 +1,13 @@
 import { BuildTimeFile } from "./build-time-file";
 import { ID, rootId } from "./id";
-import { Persona, assertStartupTime } from "./persona";
+import { Persona, assertStartupTime, runningInProcess } from "./persona";
 import * as readline from 'readline';
 import { parseArgsStringToArgv } from 'string-argv';
 import path from 'path';
 import assert from "assert";
 import { BuildTimeValue } from "./build-time";
 import { secrets } from "./secret";
+import { gitIgnorePath } from "./build-git-ignore";
 
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
@@ -21,7 +22,7 @@ let cliPersona: Persona | undefined;
  * @param rawArgs The raw arguments as passed to the CLI, not including the
  * command string itself or anything before it.
  */
-type CliEntryPoint = (parsedArgs: ParsedArgs, rawArgs: string[]) => void;
+type CliEntryPoint = (parsedArgs: ParsedArgs, rawArgs: string[]) => void | Promise<void>;
 
 /**
  * Defines a CLI of the distributed application.
@@ -42,6 +43,11 @@ new BuildTimeFile(rootId('cli-dot-env'), {
   content: new BuildTimeValue(() => Object.entries(secrets).map(([key, secret]) => `${key}=${secret.get()}`).join('\n')),
   filepath: 'bin/.env'
 });
+// Git-ignore everything in the bin directory
+new BuildTimeFile(rootId('cli-gitignore'), {
+  content: `*`,
+  filepath: 'bin/.gitignore'
+});
 
 
 function registerCliCommand(cliCommand: CliCommand) {
@@ -61,7 +67,7 @@ function registerCliCommand(cliCommand: CliCommand) {
 async function runCli() {
   const command = process.argv[2];
   if (!command) {
-    runInteractiveTerminal();
+    runInteractiveTerminal().catch(console.error);
   } else if (cliCommands[command]) {
     const rawArgs = process.argv.slice(3);
     const parsedArgs = parseCliArgs(rawArgs);
@@ -73,30 +79,39 @@ async function runCli() {
   }
 }
 
-function runInteractiveTerminal() {
+async function runInteractiveTerminal() {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
   });
 
-  console.log('No command provided. Running in interactive mode.')
+  console.log('Running in interactive mode.');
 
-  const queryUser = () => {
-    rl.question('Please enter a command:\n> ', (input) => {
+  const queryUser = async () => {
+    const prompt = `Please enter a command: (options are ${
+      Object.keys(cliCommands).join(', ')
+    })\n> `;
+
+    rl.question(prompt, async (input) => {
       // Parse the input string into command and arguments
       const [command, ...args] = parseArgsStringToArgv(input);
 
       // Check if the command exists in cliCommands
       if (cliCommands.hasOwnProperty(command)) {
         const parsedArgs = parseCliArgs(args);
-        cliCommands[command].entryPoint(parsedArgs, args);
+        try {
+          // Await the entryPoint in case it's asynchronous
+          await cliCommands[command].entryPoint(parsedArgs, args);
+        } catch (e) {
+          console.error(e);
+        }
       } else {
         console.log(`Invalid command: ${command}`);
         listCommands();
       }
 
       // Query the user again
-      queryUser();
+      await queryUser();
     });
   };
 
@@ -106,7 +121,7 @@ function runInteractiveTerminal() {
   });
 
   // Start querying the user
-  queryUser();
+  await queryUser();
 }
 
 function listCommands() {

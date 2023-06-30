@@ -1,5 +1,5 @@
 import { CliCommand } from './cli-command';
-import { rootId, Store, ApiServer, ID, runPersona, onDeploy } from './index';
+import { rootId, Store, ApiServer, ID, run, onDeploy } from './index';
 
 interface Customer {
   id: string;
@@ -22,7 +22,7 @@ createExampleClient(id`example-client`, server);
 temp_experiments();
 
 // Run the persona defined by the current file
-runPersona();
+run();
 
 function createCustomerServer(id: ID): CustomerServer {
   // Create a store for customers (backed by postgres)

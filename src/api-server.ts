@@ -107,7 +107,6 @@ function clientWrapper({ route, method: verb }: EndpointInfo, host: string, port
     // The CLIs are run outside the docker container network, so they need to
     // use localhost. The docker container network uses the service name as the
     // hostname (running in docker-compose).
-    console.log(`Running in persona ${currentPersona?.id} (host ${currentPersona?.host})`)
     const hostName = (currentPersona?.host === 'cli-command') ? 'localhost' : host;
     const url = `http://${hostName}:${port.get()}${route}`;
     const response = await axios.request({

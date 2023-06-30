@@ -15,7 +15,9 @@ Install docker and docker-compose.
 
 ## Install
 
-Because this is a POC, I haven't published this to NPM. To use it, clone the repo into `libs/@coder-mike/poc-infra-generator` under your project and run `npm install` and `npm run build` (in the cloned directory).
+```sh
+npm install @coder-mike/poc-infra-generator
+```
 
 ## Example Usage
 

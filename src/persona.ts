@@ -37,7 +37,7 @@ export const runningInProcess = process?.env?.PERSONA === undefined;
 
 // The persona engine is the environment in which the persona is running. For
 export type PersonaHost =
-  | 'node' // The persona is designed for a node.js server process
+  | 'node-daemon' // The persona is designed for a node.js server process
   | 'cli' // The persona is an interactive terminal. There can be only one.
   | 'cli-command' // The persona is a CLI command
   | 'browser' // The persona is designed for the browser
@@ -69,16 +69,17 @@ export class Persona {
   }
 }
 
-export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', async () => {
+export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node-daemon', async () => {
   // The in-process persona is used for testing and development. It runs the
   // application in the same process as the test or development environment.
   // It works by executing all other persona entry points directly.
   const personasToRun = Object.values(registeredPersonas)
-    .filter(p => p !== inProcessPersona && p.host === 'node');
+    .filter(p => p !== inProcessPersona && p.host === 'node-daemon');
 
   const promises: Promise<any>[] = [];
 
   for (const persona of personasToRun) {
+    console.log(`Running ${persona.id} (${persona.host})`);
     // Note: if the persona is async, we run them in parallel
     promises.push(Promise.resolve(persona.entryPoint())
       .catch(console.error));
@@ -100,15 +101,15 @@ export const inProcessPersona = new Persona(rootId('inProcessPersona'), 'node', 
 });
 
 /**
- * Called at the end of startup to run the persona identified by the
- * the given ID or PERSONA environment variable.
+ * Called at the end of startup to run the persona identified by the the given
+ * ID. If no ID is given, it will use the PERSONA environment variable.
  */
-export function runPersona(id?: ID): void {
+export function run(personaId?: ID): void {
   let persona: Persona;
-  if (id) {
-    persona = registeredPersonas[idToSafeName(id)];
+  if (personaId) {
+    persona = registeredPersonas[idToSafeName(personaId)];
     if (!persona) {
-      throw new Error(`No persona registered with ID ${id}`);
+      throw new Error(`No persona registered with ID ${personaId}`);
     }
   } else if (process.env.PERSONA) {
     const environmentVariableValue = process.env.PERSONA.trim();
@@ -126,6 +127,7 @@ export function runPersona(id?: ID): void {
     throw new Error(`Already running persona ${currentPersona.id}`);
   }
   currentPersona = persona;
+  console.log(`Running ${persona.id} (${persona.host})`);
   Promise.resolve(persona.entryPoint())
     .catch(console.error);
 }

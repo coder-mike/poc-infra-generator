@@ -6,8 +6,9 @@ import path from 'path'
 import { BuildTimeValue, BuildTimeValueOr } from './build-time';
 import { Port } from './port';
 import { secrets } from './secret';
+import { gitIgnorePath } from './build-git-ignore';
 
-new BuildTimeFile(rootId('docker-compose'), {
+const dockerComposeFile = new BuildTimeFile(rootId('docker-compose'), {
   ext: '.yml',
   content: new BuildTimeValue(() =>
     yaml.dump({
@@ -57,6 +58,8 @@ new BuildTimeFile(rootId('docker-compose'), {
     }, { lineWidth: 1000, noCompatMode: true, styles: { '!!null': 'empty' } })
   )
 });
+// The docker-compose file contains all the temporary passwords
+gitIgnorePath(dockerComposeFile.filepath);
 
 interface ServiceInfo {
   dockerImage: string | BuildTimeFile;

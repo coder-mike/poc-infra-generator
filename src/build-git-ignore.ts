@@ -15,6 +15,9 @@ export function gitIgnorePath(filepath: string) {
   assertStartupTime();
   // Relative to the directory in which the .gitignore file is located
   const relativePath = path.relative(path.resolve('build'), filepath)
+  if (relativePath.startsWith('..')) {
+    throw new Error(`File ${filepath} is not in the build directory`);
+  }
 
   if (files.has(relativePath)) {
     throw new Error(`File ${filepath} already ignored`);

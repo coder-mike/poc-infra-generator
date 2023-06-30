@@ -1,11 +1,15 @@
 {
   "name": "@coder-mike/poc-infra-generator",
-  "description": "Author: Michael Hunter\r License: MIT",
+  "description": "A library for streamlined creation and orchestration of distributed systems using Docker",
+
   "version": "0.0.1",
   "main": "dist/index.js",
   "files": [
     "dist/**/*"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "// build": "Builds the library TypeScript",
     "build": "tsc",

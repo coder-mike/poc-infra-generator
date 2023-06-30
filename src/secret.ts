@@ -28,7 +28,7 @@ export class Secret<T> extends BuildTimeValue<T> {
       case 'build': return super.get();
       case 'cli':
       case 'cli-command':
-      case 'node':
+      case 'node-daemon':
         return JSON.parse(process.env[this.environmentVariableName] ?? unexpected());
       case 'browser': throw new Error(`Currently no way to route secrets to a browser environment`);
       case 'none': unexpected(); // It doesn't make sense that this code is executing in a non-executional environment
