@@ -1,83 +1,23 @@
 import { CliCommand } from './cli-command';
 import { rootId, Store, ApiServer, ID, run, onDeploy } from './index';
 
-interface Customer {
-  id: string;
-  name: string;
-}
-
-interface CustomerServer {
-  postCustomer(customer: Customer): Promise<void>;
-  getCustomer(id: string): Promise<Customer>;
-}
-
 const id = rootId('my-app');
 
-// Create the server (which will create its own database)
-const server = createCustomerServer(id`customer-server`);
+const store = new Store<{ message: string }>(id`store`);
 
-// Create the client, with injected reference to server
-createExampleClient(id`example-client`, server);
+new CliCommand(id`get`, 'get', async (args) => {
+  const key = args.positional[0];
+  const value = await store.get(key);
+  console.log(`get ${key}: ${value?.message}`);
+});
 
-temp_experiments();
+new CliCommand(id`set`, 'set', async (args) => {
+  const key = args.positional[0];
+  const message = args.positional[1];
+  await store.set(key, { message });
+  console.log(`set ${key}: ${message}`);
+});
 
 // Run the persona defined by the current file
 run();
 
-function createCustomerServer(id: ID): CustomerServer {
-  // Create a store for customers (backed by postgres)
-  const db = new Store(id`db`);
-
-  // Create an Express API server
-  const server = new ApiServer(id`api`);
-
-  // Endpoint to post a customer to the database
-  const postCustomer = server.defineEndpoint(
-    '/api/customer',
-    async (customer: Customer) => {
-      await db.set(customer.id, customer);
-    },
-    { method: 'POST' }
-  );
-
-  // Endpoint to get a customer from the database
-  const getCustomer = server.defineEndpoint(
-    '/api/customer',
-    async (id: string) => {
-      return db.get(id);
-    },
-    { method: 'GET' }
-  );
-
-  return {
-    postCustomer,
-    getCustomer,
-  }
-}
-
-function createExampleClient(id: ID, server: CustomerServer) {
-  // The client will just be a docker container that runs at deployment time
-  onDeploy(id, async () => {
-    // Save customer to the database via the API server
-    await server.postCustomer({ id: '1', name: 'John Doe' });
-
-    // Load customer from the database via the API server
-    const customer = await server.getCustomer('1');
-
-    console.log(`Loaded customer: ${JSON.stringify(customer)}`);
-  })
-}
-
-// ----------------------- Experiments ---------------------
-
-function temp_experiments() {
-  new CliCommand(id`add`, 'add', async (args) => {
-    const [a, b] = args.positional;
-    console.log(`${a} + ${b} = ${parseFloat(a) + parseFloat(b)}`);
-  });
-  new CliCommand(id`load`, 'load', async (args) => {
-    const id = args.named['id'];
-    const customer = await server.getCustomer(id);
-    console.log(`Loaded customer: ${JSON.stringify(customer)}`);
-  });
-}

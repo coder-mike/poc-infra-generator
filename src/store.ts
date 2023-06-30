@@ -4,8 +4,9 @@ import { notImplemented } from "./utils";
 import { assertNotStartup, assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
 import { Password } from "./password";
-import { Pool } from 'pg';
+import { Pool, PoolConfig } from 'pg';
 import { Port } from "./port";
+import { registerTeardownHandler } from "./teardown";
 
 export interface StoreIndex<T> {
   // Retrieves all the items from the store that match the given index value
@@ -101,7 +102,6 @@ class PostgresStore<T> {
   private postgresService: DockerService;
   private password: Password;
   private externalPort: Port;
-  private databaseName: string;
   private primaryTableName: string;
   private volume: DockerVolume;
   // Resolved promise if we're connected. Rejected promise if we couldn't
@@ -111,10 +111,9 @@ class PostgresStore<T> {
 
   constructor (public id: ID) {
     assertStartupTime();
-    this.password = new Password(id);
-    this.externalPort = new Port(id);
+    this.password = new Password(id`password`);
+    this.externalPort = new Port(id`port`);
     this.volume = new DockerVolume(id`data`);
-    this.databaseName = idToSafeName(id);
     this.primaryTableName = idToSafeName(id);
 
     this.postgresService = new DockerService(id, {
@@ -258,9 +257,24 @@ class PostgresStore<T> {
 
   private async createPool(): Promise<Pool> {
     const startTime = Date.now();
-    const maxWaitTime = 30000; // 30 seconds in milliseconds
+    const maxWaitTime = 10_000;
     const baseDelay = 100; // base delay in milliseconds
     let attempt = 0;
+
+    // The port and hostname are different depending on whether we're running
+    // in a CLI on the docker-compose host or inside the docker-compose
+    // network.
+    const port = currentPersona!.region === 'inside-docker-network'
+      ? 5432
+      : this.externalPort!.get();
+    const host = currentPersona!.region === 'inside-docker-network'
+      ? this.postgresService.name
+      : 'localhost';
+    const user = 'postgres';
+    const password = this.password!.get();
+    const database = 'postgres'
+    const config: PoolConfig = { host, port, user, password, database };
+    let pool: Pool | undefined;
 
     // A retry loop to connect to the database. This is necessary because the
     // database may not be ready yet when the store is created, especially if
@@ -268,43 +282,36 @@ class PostgresStore<T> {
     // all the services roughly at the same time.
     while (true) {
       try {
-        // The port and hostname are different depending on whether we're running
-        // in a CLI on the docker-compose host or inside the docker-compose
-        // network.
-        const port = currentPersona!.region === 'inside-docker-network'
-          ? 5432
-          : this.externalPort!.get();
-        const host = currentPersona!.region === 'inside-docker-network'
-          ? this.postgresService.name
-          : 'localhost';
-        const user = 'postgres';
-        const password = this.password!.get();
-        const database = this.databaseName!;
-        // Initialize PostgreSQL connection pool
-        const postgresPool = new Pool({ host, port, user, password, database });
+        if (pool) pool.end();
+        const newPool = new Pool(config);
+        pool = newPool;
+        await this.seedDatabase(pool);
 
-        // Create the table if it doesn't exist.
-        const createTableQuery = `CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
-          key serial PRIMARY KEY,
-          value jsonb
-        )`;
-
-        await postgresPool.query(createTableQuery);
-
-        return postgresPool;
+        registerTeardownHandler(() => newPool.end());
+        return pool;
       } catch (err) {
         // Check if total wait time has exceeded 30 seconds
         if (Date.now() - startTime > maxWaitTime) {
-          throw new Error('Could not connect to the database within 30 seconds');
+          throw err;
         }
 
         // Exponential backoff with jitter
-        const delay = (Math.pow(2, attempt) + Math.random()) * baseDelay;
+        const delay = Math.pow(2, attempt + Math.random()) * baseDelay;
+
+        console.log(`Could not connect to the database, retrying in ${Math.round(delay)} ms...`)
         await new Promise(resolve => setTimeout(resolve, delay));
 
         attempt++;
       }
     }
+  }
+
+  private async seedDatabase(postgresPool: Pool): Promise<void> {
+    // Create the table if it doesn't exist.
+    await postgresPool.query(`CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
+      key serial PRIMARY KEY,
+      value jsonb
+    )`);
   }
 }
 

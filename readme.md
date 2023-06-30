@@ -189,3 +189,5 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 - Similarly, this POC assumes that everything is accessible to everything on the network, which is not suitable for a production environment. A future version could be more restrictive. This could be as simple as having a `dependsOn` clause in each service to declare the injected dependencies, and then this can be used to auto-generate the network restrictions and environment variables.
 
 - Indexer functions in the Store are assumed to be immutable. If you change the implementation of an indexer function, you need to change the ID of the indexer (e.g. appending a version number to the ID).
+
+- Postgres instances launched with docker-compose have their password configuration embedded into the volume after the first use, so if you change the password (or you delete the `passwords.json` file in the build output), you need to manually delete the volume.

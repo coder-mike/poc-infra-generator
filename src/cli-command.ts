@@ -5,9 +5,10 @@ import * as readline from 'readline';
 import { parseArgsStringToArgv } from 'string-argv';
 import path from 'path';
 import assert from "assert";
-import { BuildTimeValue } from "./build-time";
+import { BuildTimeValue, assertBuildTime } from "./build-time";
 import { secrets } from "./secret";
 import { gitIgnorePath } from "./build-git-ignore";
+import { teardown } from "./teardown";
 
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
@@ -40,7 +41,7 @@ export class CliCommand {
 }
 
 new BuildTimeFile(rootId('cli-dot-env'), {
-  content: new BuildTimeValue(() => Object.entries(secrets).map(([key, secret]) => `${key}=${secret.get()}`).join('\n')),
+  content: new BuildTimeValue(getDotEnvFileContent),
   filepath: 'bin/.env'
 });
 // Git-ignore everything in the bin directory
@@ -48,6 +49,31 @@ new BuildTimeFile(rootId('cli-gitignore'), {
   content: `*`,
   filepath: 'bin/.gitignore'
 });
+
+function getDotEnvFileContent() {
+  assertBuildTime();
+  let envContent = '';
+
+  for (const [key, secret] of Object.entries(secrets)) {
+    const value = secret.get();
+
+    // JSON encode the value
+    let jsonValue = JSON.stringify(value);
+
+    // Escape percent signs for Windows batch files
+    jsonValue = jsonValue.replace(/%/g, '%%');
+
+    // Escape exclamation marks for Windows batch files (delayed expansion)
+    jsonValue = jsonValue.replace(/!/g, '^!');
+
+    // Escape newlines for multi-line values
+    jsonValue = jsonValue.replace(/\n/g, '\\n');
+
+    // Add to .env content
+    envContent += `${key}=${jsonValue}\n`;
+  }
+  return envContent;
+}
 
 
 function registerCliCommand(cliCommand: CliCommand) {
@@ -67,11 +93,12 @@ function registerCliCommand(cliCommand: CliCommand) {
 async function runCli() {
   const command = process.argv[2];
   if (!command) {
-    runInteractiveTerminal().catch(console.error);
+    await runInteractiveTerminal().catch(console.error);
   } else if (cliCommands[command]) {
     const rawArgs = process.argv.slice(3);
     const parsedArgs = parseCliArgs(rawArgs);
-    cliCommands[command].entryPoint(parsedArgs, rawArgs);
+    await cliCommands[command].entryPoint(parsedArgs, rawArgs);
+    await teardown();
   } else {
     console.error(`Unknown command: ${command}`);
     console.error(`Available commands: ${Object.keys(cliCommands).join(', ')}`);
@@ -177,12 +204,13 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
   // Entry script relative to the bin directory
   entryScript = path.relative(path.join(process.cwd(), 'bin'), entryScript)
 
-  const persona = new Persona(id, 'cli-command', () => {
+  const persona = new Persona(id, 'cli-command', async () => {
     // Note: only slicing 2, rather than 3, because the command argument isn't
     // here.
     const rawArgs = process.argv.slice(2);
     const parsedArgs = parseCliArgs(rawArgs);
-    command.entryPoint(parsedArgs, rawArgs);
+    await command.entryPoint(parsedArgs, rawArgs);
+    await teardown();
   });
 
   let runner: string;

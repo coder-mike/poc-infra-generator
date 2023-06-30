@@ -23,7 +23,7 @@
     "// example:build:docker": "Build the docker images for the example",
     "example:build:docker": "docker-compose -f build/docker-compose.yml build",
     "// example:start:docker": "Start the docker containers for the example",
-    "example:start:docker": "docker-compose -f build/docker-compose.yml up",
+    "example:start:docker": "docker-compose -f build/docker-compose.yml up --remove-orphans",
     "// example:start:in-process": "Run the example in-process without needing to build anything",
     "example:start:in-process": "ts-node src/example.ts"
   },
