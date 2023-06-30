@@ -1,21 +1,62 @@
 import assert from "assert";
 import { ID, idToSafeName } from "./id";
 import { notImplemented } from "./utils";
-import { assertNotStartup, assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
+import { assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
 import { Password } from "./password";
 import { Pool, PoolConfig } from 'pg';
 import { Port } from "./port";
 import { registerTeardownHandler } from "./teardown";
 
-export interface StoreIndex<T> {
-  // Retrieves all the items from the store that match the given index value
+
+export interface StoreIndex<T, U> {
+  /**
+   * Retrieves all the items from the store that match the given index value
+   */
   get(key: IndexKey): Promise<T[]>;
+
+  /**
+   * Same as `get`, but returns only the object keys.
+   */
+  getKeys(key: IndexKey): Promise<PrimaryKey[]>;
+
+  /**
+   * Same as `get`, but returns only the corresponding inline values in the
+   * index, if `IndexEntry.inlineValue`.
+   */
+  getInline(key: IndexKey): Promise<U[]>;
+
 }
 
 type PrimaryKey = string;
 type IndexId = string;
 type IndexKey = string;
+
+interface IndexEntry<U> {
+  /**
+   * The key to put in the index. These do not need to be unique.
+   *
+   * This is not the primary key of the object being indexed. It's a piece of
+   * information you want to use to look up the object.
+   *
+   * Example: If you're indexing users by their security roles, the `key` might
+   * be the security role. Then `StoreIndex.get('admin')` would return all the
+   * users with the admin role.
+   */
+  indexKey: IndexKey;
+
+  /**
+   * Optionally, a value to store in the index itself. This is useful if you
+   * want to get information from the index without returning the whole object
+   * from the main table. For example, if you're indexing users by their
+   * security roles, you might want to store the user's name in the index so
+   * that `StoreIndex.get('admin')` returns a list of names instead of a list
+   * of objects.
+   */
+  inlineValue?: U;
+};
+
+type Indexer<T, U> = (value: T) => IndexEntry<U>[];
 
 /**
  * A simple key-value store with optional indexes, backed either its private
@@ -35,7 +76,7 @@ export class Store<T = any> {
   /**
    * Define an index for the data
    */
-  defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+  defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
     assertStartupTime();
     return this.backingStore.defineIndex(id, indexer);
   }
@@ -108,6 +149,7 @@ class PostgresStore<T> {
   // connect. Pending promise if we're busy connecting. Undefined if we haven't
   // tried to connect yet.
   private postgresPool?: Promise<Pool>;
+  private indexers: { id: ID, indexer: Indexer<T, any> }[] = [];
 
   constructor (public id: ID) {
     assertStartupTime();
@@ -129,9 +171,14 @@ class PostgresStore<T> {
     })
   }
 
-  defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+  defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
     assertStartupTime();
-    notImplemented()
+    this.indexers.push({ id, indexer });
+    return {
+      get: key => this.index_get(id, key),
+      getKeys: key => this.index_getKeys(id, key),
+      getInline: key => this.index_getInline(id, key)
+    }
   }
 
   async get(key: PrimaryKey): Promise<T | undefined> {
@@ -313,40 +360,89 @@ class PostgresStore<T> {
       value jsonb
     )`);
   }
+
+  /**
+   * Retrieves all the items from the store that match the given index value
+   */
+  private index_get(indexId: ID, key: IndexKey): Promise<T[]> {
+    assertRuntime();
+    notImplemented();
+  }
+
+  /**
+   * Same as `get`, but returns only the object keys.
+   */
+  private index_getKeys(indexId: ID, key: IndexKey): Promise<PrimaryKey[]> {
+    assertRuntime();
+    notImplemented();
+  }
+
+  /**
+   * Same as `get`, but returns only the corresponding inline values in the
+   * index, if `IndexEntry.inlineValue`.
+   */
+  private index_getInline(indexId: ID, key: IndexKey): Promise<any[]> {
+    assertRuntime();
+    notImplemented();
+  }
 }
+
+interface IndexRow {
+  indexKey: IndexKey;
+  objectKey: PrimaryKey;
+  inlineValue: any;
+};
+
+interface PrimaryRow<T> {
+  value: T;
+  indexKeys: Map<IndexId, IndexKey[]>;
+};
 
 class InMemoryStore<T> {
   private indexes: Map<IndexId, {
-    indexer: (value: T) => IndexKey[];
-    inMemory: Map<IndexKey, Set<T>>;
+    indexer: Indexer<T, any>;
+    data: Map<IndexKey, Map<PrimaryKey, IndexRow[]>>;
   }> = new Map();
-  private data: Map<PrimaryKey, {
-    value: T,
-    indexKeys: Map<IndexId, IndexKey[]>
-  }> = new Map();
+
+  private data: Map<PrimaryKey, PrimaryRow<T>> = new Map();
 
   constructor (public id: ID) {
     assertStartupTime();
   }
 
-  defineIndex(id: ID, indexer: (value: T) => IndexKey[]): StoreIndex<T> {
+  defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
     assertStartupTime();
 
     if (this.indexes.has(id.value)) {
       throw new Error(`Index ${id.value} already defined`);
     }
 
-    const inMemoryIndex = new Map();
-    this.indexes.set(id.value, { indexer, inMemory: inMemoryIndex });
+    const inMemoryIndex = new Map<IndexKey, Map<PrimaryKey, IndexRow[]>>();
+    this.indexes.set(id.value, { indexer, data: inMemoryIndex });
+
+    // Retrieve all the entries associated with an indexKey
+    const retrieve = (indexKey: IndexKey) =>
+      Array.from(inMemoryIndex.get(indexKey)?.values() ?? []).flat()
+
+    const getKeys = async (indexKey: IndexKey): Promise<PrimaryKey[]> => {
+      return retrieve(indexKey)
+        .map(row => row.objectKey)
+    }
+
+    const get = async (indexKey: IndexKey): Promise<T[]> => {
+      return retrieve(indexKey)
+        .map(row => this.data.get(row.objectKey)!.value)
+    }
+
+    const getInline = async (indexKey: IndexKey): Promise<any[]> => {
+      return retrieve(indexKey)
+        .map(row => row.inlineValue)
+    }
 
     return {
-      get: async (indexKey: IndexKey): Promise<T[]> => {
-        if (runningInProcess) {
-          return Array.from(inMemoryIndex.get(indexKey) ?? []);
-        } else {
-          notImplemented()
-        }
-      }
+      getKeys,
+      get,
+      getInline,
     }
   }
 
@@ -373,17 +469,26 @@ class InMemoryStore<T> {
     // Insert into new indexes
     const indexKeys = new Map<IndexId, IndexKey[]>();
     for (const [indexId, index] of this.indexes.entries()) {
-      const keys = index.indexer(value);
-      for (const indexKey of keys) {
-        if (!index.inMemory.has(indexKey)) {
-          index.inMemory.set(indexKey, new Set());
+      const indexEntries = index.indexer(value);
+      for (const { indexKey, inlineValue } of indexEntries) {
+        let indexData = index.data.get(indexKey);
+        if (!indexData) {
+          indexData = new Map();
+          index.data.set(indexKey, indexData);
         }
-        // Add to index
-        index.inMemory.get(indexKey)!.add(value);
+
+        // Rows for object
+        let rows = indexData.get(key);
+        if (!rows) {
+          rows = [];
+          indexData.set(key, rows);
+        }
+
+        rows.push({ indexKey, objectKey: key, inlineValue });
       }
       // Record in the store that we've added it to the index so we can remove
       // it again later without searching the indexes.
-      indexKeys.set(indexId, keys);
+      indexKeys.set(indexId, indexEntries.map(entry => entry.indexKey));
     }
 
     this.data.set(key, { value, indexKeys });
@@ -402,12 +507,12 @@ class InMemoryStore<T> {
       const index = this.indexes.get(indexId)!;
       // For each key in the index under which the original object appears
       for (const indexKey of indexKeys) {
-        const objects = index.inMemory.get(indexKey)!;
+        const objects = index.data.get(indexKey)!;
         // Remove the original object from the index
-        assert(objects.has(original.value));
-        objects.delete(original.value);
+        assert(objects.has(key));
+        objects.delete(key);
         if (objects.size === 0) {
-          index.inMemory.delete(indexKey);
+          index.data.delete(indexKey);
         }
       }
     }
