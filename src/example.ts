@@ -24,21 +24,21 @@ const toIndex = new store.Index(id`to`, (value) => [{
 new CliCommand(id`get`, 'get', async (args) => {
   const key = args.positional[0];
   const value = await store.get(key);
-  console.log(`get ${key}: ${JSON.stringify(value, null, 4)}`);
+  console.log(`get ${key}:`, value);
 });
 
 new CliCommand(id`set`, 'set', async (args) => {
   const [key, text, from, to] = args.positional;
   const message = { text, from, to };
   await store.set(key, message);
-  console.log(`set ${key}: ${message}`);
+  console.log(`set ${key}:`, message);
 });
 
 // Get all messages from a given sender
 new CliCommand(id`from`, 'from', async (args) => {
   const [from] = args.positional;
   for (const { key, inlineValue } of await fromIndex.get(from)) {
-    console.log(`- ${key} (${inlineValue})`);
+    console.log(`- ${key}`, inlineValue);
   }
 });
 
@@ -46,7 +46,7 @@ new CliCommand(id`from`, 'from', async (args) => {
 new CliCommand(id`to`, 'to', async (args) => {
   const [to] = args.positional;
   for (const { key, inlineValue } of await toIndex.get(to)) {
-    console.log(`- ${key} (${inlineValue})`);
+    console.log(`- ${key}`, inlineValue);
   }
 });
 

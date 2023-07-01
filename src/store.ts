@@ -3,7 +3,7 @@ import { ID, idToSafeName } from "./id";
 import { assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
 import { Password } from "./password";
-import { Pool, PoolConfig } from 'pg';
+import pgPromise, { IDatabase, QueryParam }  from 'pg-promise';
 import { Port } from "./port";
 import { registerTeardownHandler } from "./teardown";
 
@@ -167,6 +167,12 @@ interface IndexInfo<T> {
   indexer: Indexer<T, any>;
 }
 
+// Initialize the pg-promise library
+const pgp = pgPromise();
+registerTeardownHandler(() => pgp.end());
+
+type Pool = IDatabase<{}>;
+
 class PostgresStore<T> {
   private postgresService: DockerService;
   private password: Password;
@@ -232,44 +238,40 @@ class PostgresStore<T> {
     assertRuntime();
     const pool = await this.getOrCreatePool();
 
-    const params: string[] = [];
-    const statements: string[] = [];
-
-    // Define a parameter and return the SQL placeholder for it (e.g. $1)
-    const param = (value: any) => '$' + params.push(value);
-    // Define a statement and add it to the list of statements to execute
-    const statement = (sqlStatement: string) => statements.push(sqlStatement);
-
-    // Start the transaction
-    statement('BEGIN;');
+    const queries: { query: QueryParam, values: any[] }[] = [];
 
     // Insert or update in main table
-    const keyParam = param(key);
-    const valueParam = param(value);
-    statement(`
-      INSERT INTO ${this.primaryTableName} (key, value) VALUES (${keyParam}, ${valueParam})
-      ON CONFLICT (key) DO UPDATE SET value = ${valueParam} WHERE ${this.primaryTableName}.key = ${keyParam};
-    `);
+    queries.push({
+      query: `
+        INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1;
+      `,
+      values: [key, JSON.stringify(value)]
+    });
 
     for (const { tableName, indexer } of this.indexes) {
       // Delete all old entries in index table for given object key
-      statement(`DELETE FROM ${tableName} WHERE key = ${keyParam};`);
+      queries.push({
+        query: `DELETE FROM ${tableName} WHERE key = $1;`,
+        values: [key]
+      });
 
       // Get all index keys and their corresponding inline values using the indexer function
       for (const { indexKey, inlineValue } of indexer(value)) {
         // Insert new index rows for each index key and inline value
-        statement(`INSERT INTO ${tableName} (indexKey, key, inlineValue) VALUES (${param(indexKey)}, ${param(key)}, ${param(inlineValue)});`);
+        queries.push({
+          query: `INSERT INTO ${tableName} (index_key, key, inline_value) VALUES ($1, $2, $3);`,
+          values: [indexKey, key, JSON.stringify(inlineValue)]
+        });
       }
     }
 
-    // End the transaction
-    statement(`COMMIT;`);
-
-    // Execute the accumulated query with parameters
-    const query = statements.join('\n\n');
-    await pool.query(query, params);
+    // Use a transaction to execute all the queries
+    await pool.tx(async t => {
+      const batch = queries.map(q => t.none(q.query, q.values));
+      await t.batch(batch);
+    });
   }
-
 
   async del(key: PrimaryKey): Promise<void> {
     assertRuntime();
@@ -326,7 +328,7 @@ class PostgresStore<T> {
 
     while (true) {
       // Retrieve the keys in batches
-      let result;
+      let result: any;
       if (lastKey === null) {
         result = await pool.query(
           `SELECT key FROM ${this.primaryTableName} ORDER BY key ASC LIMIT $1`,
@@ -339,7 +341,8 @@ class PostgresStore<T> {
         );
       }
 
-      const keys = result.rows.map(row => row.key) as PrimaryKey[];
+      assert(false, 'untested')
+      const keys = result.map((row: any) => row.key) as PrimaryKey[];
 
       // If no more keys, then exit the loop
       if (keys.length === 0) {
@@ -380,8 +383,7 @@ class PostgresStore<T> {
     const user = 'postgres';
     const password = this.password!.get();
     const database = 'postgres'
-    const config: PoolConfig = { host, port, user, password, database };
-    let pool: Pool | undefined;
+    let pool: pgPromise.IDatabase<{}> | undefined;
 
     // A retry loop to connect to the database. This is necessary because the
     // database may not be ready yet when the store is created, especially if
@@ -389,12 +391,9 @@ class PostgresStore<T> {
     // all the services roughly at the same time.
     while (true) {
       try {
-        if (pool) pool.end();
-        const newPool = new Pool(config);
+        const newPool = pgp({ host, port, user, password, database });
         pool = newPool;
         await this.seedDatabase(pool);
-
-        registerTeardownHandler(() => newPool.end());
         return pool;
       } catch (err) {
         // Check if total wait time has exceeded 30 seconds
@@ -430,18 +429,18 @@ class PostgresStore<T> {
         await postgresPool.query(`
           CREATE TABLE IF NOT EXISTS ${index.tableName} (
             id SERIAL PRIMARY KEY,
-            -- The indexKey column is used to store the index key
-            indexKey TEXT,
+            -- The index_key column is used to store the index key
+            index_key TEXT,
             -- The key column is used to store the primary key of the item
             key TEXT REFERENCES ${this.primaryTableName}(key),
-            inlineValue jsonb
+            inline_value jsonb
           )
         `);
 
         // Create index on indexKey column for faster searches
         await postgresPool.query(`
-          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_indexKey
-          ON ${index.tableName} (indexKey)
+          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_index_key
+          ON ${index.tableName} (index_key)
         `);
 
         // Create index on key column for faster deletions
@@ -472,28 +471,33 @@ class PostgresStore<T> {
     // Construct the SQL query based on the options.
     let parameters: any[] = [indexKey];
 
-    let toSelect = ['indexTable.indexKey', 'indexTable.key'];
-    if (retrieveInlineValues) toSelect.push('indexTable.inlineValue');
-    if (retrieveValues) toSelect.push('mainTable.value');
+    let toSelect = ['index_table.index_key', 'index_table.key'];
+    if (retrieveInlineValues) toSelect.push('index_table.inline_value');
+    if (retrieveValues) toSelect.push('main_table.value');
 
     let query = `
       SELECT ${toSelect.join(', ')}
-      FROM ${index.tableName} AS indexTable`
+      FROM ${index.tableName} AS index_table`
 
     if (retrieveValues) {
       query += `
-        JOIN ${this.primaryTableName} AS mainTable
-        ON indexTable.key = mainTable.key`
+        JOIN ${this.primaryTableName} AS main_table
+        ON index_table.key = main_table.key`
     }
 
     query += `
-      WHERE indexTable.indexKey = $1`
+      WHERE index_table.index_key = $1`
 
     const pool = await this.getOrCreatePool();
     const result = await pool.query(query, parameters);
 
-    // The rows are already in the target format because the column names are consistent with the TypeScript names
-    return result.rows;
+    return result.map((row: any) => ({
+      indexKey: row.index_key,
+      key: row.key,
+      value: retrieveValues ? row.value : undefined,
+      inlineValue: retrieveInlineValues && row.inline_value !== null
+        ? row.inline_value : undefined,
+    }));
   }
 
 }
