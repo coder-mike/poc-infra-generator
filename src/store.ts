@@ -8,31 +8,44 @@ import { Pool, PoolConfig } from 'pg';
 import { Port } from "./port";
 import { registerTeardownHandler } from "./teardown";
 
+export interface IndexEntry<T, U> {
+  /** Key in the main table */
+  key: PrimaryKey;
+
+  /** Key in the index table */
+  indexKey: IndexKey;
+
+  /** Value in the main table (if retrieveValues is true) */
+  value?: T;
+
+  /** Value in the index table (if retrieveInlineValues is true) */
+  inlineValue?: U;
+}
+
+interface IndexGetOpts {
+  /**
+   * True to retrieve the associated values from the main table. Defaults to true.
+   */
+  retrieveValues?: boolean;
+
+  /**
+   * True to retrieve the inline values from the index table. Defaults to true.
+   */
+  retrieveInlineValues?: boolean;
+}
 
 export interface StoreIndex<T, U> {
   /**
-   * Retrieves all the items from the store that match the given index value
+   * Retrieves all the items from the store that match the given index key
    */
-  get(key: IndexKey): Promise<T[]>;
-
-  /**
-   * Same as `get`, but returns only the object keys.
-   */
-  getKeys(key: IndexKey): Promise<PrimaryKey[]>;
-
-  /**
-   * Same as `get`, but returns only the corresponding inline values in the
-   * index, if `IndexEntry.inlineValue`.
-   */
-  getInline(key: IndexKey): Promise<U[]>;
-
+  get(indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, U>[]>;
 }
 
 type PrimaryKey = string;
 type IndexId = string;
 type IndexKey = string;
 
-interface IndexEntry<U> {
+interface IndexerOutputEntry<U> {
   /**
    * The key to put in the index. These do not need to be unique.
    *
@@ -56,7 +69,7 @@ interface IndexEntry<U> {
   inlineValue?: U;
 };
 
-type Indexer<T, U> = (value: T) => IndexEntry<U>[];
+type Indexer<T, U> = (value: T) => IndexerOutputEntry<U>[];
 
 /**
  * A simple key-value store with optional indexes, backed either its private
@@ -149,7 +162,11 @@ class PostgresStore<T> {
   // connect. Pending promise if we're busy connecting. Undefined if we haven't
   // tried to connect yet.
   private postgresPool?: Promise<Pool>;
-  private indexers: { id: ID, indexer: Indexer<T, any> }[] = [];
+  private indexes: {
+    id: ID;
+    tableName: string;
+    indexer: Indexer<T, any>;
+  }[] = [];
 
   constructor (public id: ID) {
     assertStartupTime();
@@ -173,11 +190,10 @@ class PostgresStore<T> {
 
   defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
     assertStartupTime();
-    this.indexers.push({ id, indexer });
+    const tableName = idToSafeName(id);
+    this.indexes.push({ id, tableName, indexer });
     return {
-      get: key => this.index_get(id, key),
-      getKeys: key => this.index_getKeys(id, key),
-      getInline: key => this.index_getInline(id, key)
+      get: key => this.index_get(id, key)
     }
   }
 
@@ -354,42 +370,62 @@ class PostgresStore<T> {
   }
 
   private async seedDatabase(postgresPool: Pool): Promise<void> {
-    // Create the table if it doesn't exist.
-    await postgresPool.query(`CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
-      key serial PRIMARY KEY,
-      value jsonb
-    )`);
+    // Start transaction
+    await postgresPool.query('BEGIN');
+
+    try {
+      // Create the primary table if it doesn't exist.
+      await postgresPool.query(`CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
+        key serial PRIMARY KEY,
+        value jsonb
+      )`);
+
+      // Loop through each index and create the index tables.
+      for (const index of this.indexes) {
+        // Create index table
+        await postgresPool.query(`
+          CREATE TABLE IF NOT EXISTS ${index.tableName} (
+            id SERIAL PRIMARY KEY,
+            key TEXT,
+            object_key INTEGER REFERENCES ${this.primaryTableName}(key)
+          )
+        `);
+
+        // Create index on key column for faster searches
+        await postgresPool.query(`
+          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_key
+          ON ${index.tableName} (key)
+        `);
+
+        // Create index on object_key column for faster deletions
+        await postgresPool.query(`
+          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_object_key
+          ON ${index.tableName} (object_key)
+        `);
+      }
+
+      // Commit transaction
+      await postgresPool.query('COMMIT');
+    } catch (error) {
+      // Rollback transaction in case of any error
+      await postgresPool.query('ROLLBACK');
+      throw error;
+    }
   }
 
   /**
-   * Retrieves all the items from the store that match the given index value
+   * Retrieves all the items from the store that match the given index key
    */
-  private index_get(indexId: ID, key: IndexKey): Promise<T[]> {
-    assertRuntime();
-    notImplemented();
-  }
-
-  /**
-   * Same as `get`, but returns only the object keys.
-   */
-  private index_getKeys(indexId: ID, key: IndexKey): Promise<PrimaryKey[]> {
-    assertRuntime();
-    notImplemented();
-  }
-
-  /**
-   * Same as `get`, but returns only the corresponding inline values in the
-   * index, if `IndexEntry.inlineValue`.
-   */
-  private index_getInline(indexId: ID, key: IndexKey): Promise<any[]> {
+  private index_get(indexId: ID, indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, any>[]> {
     assertRuntime();
     notImplemented();
   }
 }
 
-interface IndexRow {
+interface IndexRow<T> {
   indexKey: IndexKey;
-  objectKey: PrimaryKey;
+  key: PrimaryKey;
+  value: T;
   inlineValue: any;
 };
 
@@ -401,7 +437,7 @@ interface PrimaryRow<T> {
 class InMemoryStore<T> {
   private indexes: Map<IndexId, {
     indexer: Indexer<T, any>;
-    data: Map<IndexKey, Map<PrimaryKey, IndexRow[]>>;
+    data: Map<IndexKey, Map<PrimaryKey, IndexRow<T>[]>>;
   }> = new Map();
 
   private data: Map<PrimaryKey, PrimaryRow<T>> = new Map();
@@ -417,32 +453,13 @@ class InMemoryStore<T> {
       throw new Error(`Index ${id.value} already defined`);
     }
 
-    const inMemoryIndex = new Map<IndexKey, Map<PrimaryKey, IndexRow[]>>();
+    const inMemoryIndex = new Map<IndexKey, Map<PrimaryKey, IndexRow<T>[]>>();
     this.indexes.set(id.value, { indexer, data: inMemoryIndex });
 
-    // Retrieve all the entries associated with an indexKey
-    const retrieve = (indexKey: IndexKey) =>
-      Array.from(inMemoryIndex.get(indexKey)?.values() ?? []).flat()
-
-    const getKeys = async (indexKey: IndexKey): Promise<PrimaryKey[]> => {
-      return retrieve(indexKey)
-        .map(row => row.objectKey)
-    }
-
-    const get = async (indexKey: IndexKey): Promise<T[]> => {
-      return retrieve(indexKey)
-        .map(row => this.data.get(row.objectKey)!.value)
-    }
-
-    const getInline = async (indexKey: IndexKey): Promise<any[]> => {
-      return retrieve(indexKey)
-        .map(row => row.inlineValue)
-    }
-
     return {
-      getKeys,
-      get,
-      getInline,
+      get: async (indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, U>[]> => {
+        return Array.from(inMemoryIndex.get(indexKey)?.values() ?? []).flat()
+      }
     }
   }
 
@@ -484,7 +501,7 @@ class InMemoryStore<T> {
           indexData.set(key, rows);
         }
 
-        rows.push({ indexKey, objectKey: key, inlineValue });
+        rows.push({ indexKey, value, key, inlineValue });
       }
       // Record in the store that we've added it to the index so we can remove
       // it again later without searching the indexes.
