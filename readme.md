@@ -182,7 +182,7 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 
 - The POC version of this library uses docker-compose as an IaC foundation, but this is not suitable for production purposes. A future version could use Terraform or some equivalent.
 
-- There is no tear-down process implemented if a new deployment doesn't contain a persistent resource that a previous one did.
+- There is no resource cleanup process implemented if a new deployment doesn't contain a persistent resource that a previous one did.
 
 - "Secrets" such as port numbers and passwords are currently given to every container, even if the container doesn't need it. A future version could be more selective.
 

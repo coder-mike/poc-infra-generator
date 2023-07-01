@@ -1,6 +1,5 @@
 import assert from "assert";
 import { ID, idToSafeName } from "./id";
-import { notImplemented } from "./utils";
 import { assertRuntime, assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import { DockerService, DockerVolume } from "./docker-compose";
 import { Password } from "./password";
@@ -78,20 +77,30 @@ type Indexer<T, U> = (value: T) => IndexerOutputEntry<U>[];
 export class Store<T = any> {
   private backingStore: InMemoryStore<T> | PostgresStore<T>;
 
+  public Index: { new <U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> }
+
   constructor (public id: ID) {
     assertStartupTime();
 
-    this.backingStore = runningInProcess
+    const backingStore = runningInProcess
       ? new InMemoryStore<T>(id)
       : new PostgresStore<T>(id);
-  }
+    this.backingStore = backingStore;
 
-  /**
-   * Define an index for the data
-   */
-  defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
-    assertStartupTime();
-    return this.backingStore.defineIndex(id, indexer);
+    // Defining this as a class to be consistent with the style of the library
+    // where resources are created using `new` syntax
+    this.Index = class<U> implements StoreIndex<T, U> {
+      private backingIndex: StoreIndex<T, U>;
+
+      constructor (id: ID, indexer: Indexer<T, U>) {
+        assertStartupTime();
+        this.backingIndex = backingStore.defineIndex(id, indexer);
+      }
+
+      get(indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, U>[]> {
+        return this.backingIndex.get(indexKey, opts);
+      }
+    }
   }
 
   /**
@@ -152,6 +161,12 @@ export class Store<T = any> {
   }
 }
 
+interface IndexInfo<T> {
+  id: ID;
+  tableName: string;
+  indexer: Indexer<T, any>;
+}
+
 class PostgresStore<T> {
   private postgresService: DockerService;
   private password: Password;
@@ -162,11 +177,7 @@ class PostgresStore<T> {
   // connect. Pending promise if we're busy connecting. Undefined if we haven't
   // tried to connect yet.
   private postgresPool?: Promise<Pool>;
-  private indexes: {
-    id: ID;
-    tableName: string;
-    indexer: Indexer<T, any>;
-  }[] = [];
+  private indexes: IndexInfo<T>[] = [];
 
   constructor (public id: ID) {
     assertStartupTime();
@@ -191,9 +202,10 @@ class PostgresStore<T> {
   defineIndex<U>(id: ID, indexer: Indexer<T, U>): StoreIndex<T, U> {
     assertStartupTime();
     const tableName = idToSafeName(id);
-    this.indexes.push({ id, tableName, indexer });
+    const indexInfo: IndexInfo<T> = { id, tableName, indexer };
+    this.indexes.push(indexInfo);
     return {
-      get: key => this.index_get(id, key)
+      get: (key, opts) => this.index_get(indexInfo, key, opts)
     }
   }
 
@@ -219,13 +231,45 @@ class PostgresStore<T> {
   async set(key: PrimaryKey, value: T): Promise<void> {
     assertRuntime();
     const pool = await this.getOrCreatePool();
-    // PostgreSQL can directly accept JSON objects for jsonb columns.
-    await pool.query(
-      `INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
-      ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1`,
-      [key, value]
-    );
+
+    const params: string[] = [];
+    const statements: string[] = [];
+
+    // Define a parameter and return the SQL placeholder for it (e.g. $1)
+    const param = (value: any) => '$' + params.push(value);
+    // Define a statement and add it to the list of statements to execute
+    const statement = (sqlStatement: string) => statements.push(sqlStatement);
+
+    // Start the transaction
+    statement('BEGIN;');
+
+    // Insert or update in main table
+    const keyParam = param(key);
+    const valueParam = param(value);
+    statement(`
+      INSERT INTO ${this.primaryTableName} (key, value) VALUES (${keyParam}, ${valueParam})
+      ON CONFLICT (key) DO UPDATE SET value = ${valueParam} WHERE ${this.primaryTableName}.key = ${keyParam};
+    `);
+
+    for (const { tableName, indexer } of this.indexes) {
+      // Delete all old entries in index table for given object key
+      statement(`DELETE FROM ${tableName} WHERE key = ${keyParam};`);
+
+      // Get all index keys and their corresponding inline values using the indexer function
+      for (const { indexKey, inlineValue } of indexer(value)) {
+        // Insert new index rows for each index key and inline value
+        statement(`INSERT INTO ${tableName} (indexKey, key, inlineValue) VALUES (${param(indexKey)}, ${param(key)}, ${param(inlineValue)});`);
+      }
+    }
+
+    // End the transaction
+    statement(`COMMIT;`);
+
+    // Execute the accumulated query with parameters
+    const query = statements.join('\n\n');
+    await pool.query(query, params);
   }
+
 
   async del(key: PrimaryKey): Promise<void> {
     assertRuntime();
@@ -376,7 +420,7 @@ class PostgresStore<T> {
     try {
       // Create the primary table if it doesn't exist.
       await postgresPool.query(`CREATE TABLE IF NOT EXISTS ${this.primaryTableName} (
-        key serial PRIMARY KEY,
+        key TEXT PRIMARY KEY,
         value jsonb
       )`);
 
@@ -386,21 +430,24 @@ class PostgresStore<T> {
         await postgresPool.query(`
           CREATE TABLE IF NOT EXISTS ${index.tableName} (
             id SERIAL PRIMARY KEY,
-            key TEXT,
-            object_key INTEGER REFERENCES ${this.primaryTableName}(key)
+            -- The indexKey column is used to store the index key
+            indexKey TEXT,
+            -- The key column is used to store the primary key of the item
+            key TEXT REFERENCES ${this.primaryTableName}(key),
+            inlineValue jsonb
           )
         `);
 
-        // Create index on key column for faster searches
+        // Create index on indexKey column for faster searches
+        await postgresPool.query(`
+          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_indexKey
+          ON ${index.tableName} (indexKey)
+        `);
+
+        // Create index on key column for faster deletions
         await postgresPool.query(`
           CREATE INDEX IF NOT EXISTS idx_${index.tableName}_key
           ON ${index.tableName} (key)
-        `);
-
-        // Create index on object_key column for faster deletions
-        await postgresPool.query(`
-          CREATE INDEX IF NOT EXISTS idx_${index.tableName}_object_key
-          ON ${index.tableName} (object_key)
         `);
       }
 
@@ -416,10 +463,39 @@ class PostgresStore<T> {
   /**
    * Retrieves all the items from the store that match the given index key
    */
-  private index_get(indexId: ID, indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, any>[]> {
+  private async index_get(index: IndexInfo<T>, indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, any>[]> {
     assertRuntime();
-    notImplemented();
+
+    const retrieveValues = opts?.retrieveValues ?? true;
+    const retrieveInlineValues = opts?.retrieveInlineValues ?? true;
+
+    // Construct the SQL query based on the options.
+    let parameters: any[] = [indexKey];
+
+    let toSelect = ['indexTable.indexKey', 'indexTable.key'];
+    if (retrieveInlineValues) toSelect.push('indexTable.inlineValue');
+    if (retrieveValues) toSelect.push('mainTable.value');
+
+    let query = `
+      SELECT ${toSelect.join(', ')}
+      FROM ${index.tableName} AS indexTable`
+
+    if (retrieveValues) {
+      query += `
+        JOIN ${this.primaryTableName} AS mainTable
+        ON indexTable.key = mainTable.key`
+    }
+
+    query += `
+      WHERE indexTable.indexKey = $1`
+
+    const pool = await this.getOrCreatePool();
+    const result = await pool.query(query, parameters);
+
+    // The rows are already in the target format because the column names are consistent with the TypeScript names
+    return result.rows;
   }
+
 }
 
 interface IndexRow<T> {
