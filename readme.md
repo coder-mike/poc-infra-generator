@@ -26,7 +26,7 @@ The following is an example that creates an Express API server called the "custo
 The following is aspirational, since the library is a WIP:
 
 ```ts
-import { rootId, Store, ApiServer, ID, runPersona } from '@coder-mike/poc-infra-generator';
+import { rootId, Store, ApiServer, ID, run, Worker } from '@coder-mike/poc-infra-generator';
 
 interface Customer {
   id: string;
@@ -46,8 +46,8 @@ const server = createCustomerServer(id`customer-server`);
 // Create the client, with injected reference to server
 createExampleClient(id`example-client`, server);
 
-// Run the persona defined by the current file
-runPersona();
+// Run the current persona
+run();
 
 function createCustomerServer(id: ID): CustomerServer {
   // Create a store for customers (backed by postgres)
