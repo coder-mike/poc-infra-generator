@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import { CliCommand } from './cli-command';
-import { rootId, Store, ApiServer, ID, run, onDeploy } from './index';
+import { rootId, Store, ApiServer, ID, run, Worker } from './index';
 
 declare global {
   interface ArrayConstructor {

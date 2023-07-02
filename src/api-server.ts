@@ -1,5 +1,5 @@
 import { ID, idToUriPath } from "./id";
-import { onDeploy } from "./on-deploy";
+import { Worker } from "./worker";
 import { assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import express, { Request, Response, NextFunction } from 'express';
 import { json } from 'body-parser';
@@ -30,7 +30,7 @@ export class ApiServer {
     assertStartupTime();
     this.port = new Port(id`port`);
     if (!runningInProcess) {
-      const service = onDeploy(id, () => setupExpressServer(this.endpoints, this.port),
+      const service = new Worker(id, () => setupExpressServer(this.endpoints, this.port),
         { ports: [this.port] })
       // docker-compose sets up a network where the service names are the hostnames.
       this.host = service.name;
