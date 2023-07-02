@@ -11,9 +11,6 @@ export interface IndexEntry<T, U> {
   /** Key in the main table */
   key: PrimaryKey;
 
-  /** Key in the index table */
-  indexKey: IndexKey;
-
   /** Value in the main table (if retrieveValues is true) */
   value?: T;
 
@@ -21,9 +18,9 @@ export interface IndexEntry<T, U> {
   inlineValue?: U;
 }
 
-interface IndexGetOpts {
+export interface IndexGetOpts {
   /**
-   * True to retrieve the associated values from the main table. Defaults to true.
+   * True to retrieve the associated values from the main table. Defaults to false.
    */
   retrieveValues?: boolean;
 
@@ -40,11 +37,11 @@ export interface StoreIndex<T, U> {
   get(indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, U>[]>;
 }
 
-type PrimaryKey = string;
-type IndexId = string;
-type IndexKey = string;
+export type PrimaryKey = string;
+export type IndexId = string;
+export type IndexKey = string;
 
-interface IndexerOutputEntry<U> {
+export interface IndexerOutputEntry<U> {
   /**
    * The key to put in the index. These do not need to be unique.
    *
@@ -68,7 +65,7 @@ interface IndexerOutputEntry<U> {
   inlineValue?: U;
 };
 
-type Indexer<T, U> = (value: T) => IndexerOutputEntry<U>[];
+export type Indexer<T, U> = (value: T) => IndexerOutputEntry<U>[];
 
 /**
  * A simple key-value store with optional indexes, backed either its private
@@ -140,7 +137,11 @@ export class Store<T = any> {
   }
 
   /**
-   * Atomically modify an item in the store
+   * Atomically modify an item in the store. If the key is not found, the
+   * function will be called with undefined as the argument. If the function
+   * returns undefined, the key will be deleted. Otherwise, the key will be set
+   * to the return value of the function. It returns the final value of the key
+   * in the store.
    */
   async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
     assertRuntime();
@@ -148,14 +149,17 @@ export class Store<T = any> {
   }
 
   /**
-   * Enumerate all keys in the store, in batches. Note that new keys that are
-   * added during this process are not guaranteed to be included in the result,
-   * and keys deleted during this process are not guaranteed to be excluded. The
-   * only guarantee is that all keys that existed at the start of the process,
-   * that have not been deleted at any point during the process, will be
-   * included in the result.
+   * Enumerate all keys in the store. Note that new keys that are added during
+   * this process are not guaranteed to be included in the result, and keys
+   * deleted during this process are not guaranteed to be excluded. The only
+   * guarantee is that all keys that existed at the start of the process, that
+   * have not been deleted at any point during the process, will be included in
+   * the result.
+   *
+   * Note that the underlying algorithm (for a postgres store) is to fetch the
+   * keys lazily in batches.
    */
-  allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
+  allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey> {
     assertRuntime();
     return this.backingStore.allKeys(opts);
   }
@@ -220,10 +224,10 @@ class PostgresStore<T> {
     const pool = await this.getOrCreatePool();
     const result = await pool.query(
       `SELECT value FROM ${this.primaryTableName} WHERE key = $1`, [key]);
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return undefined;
     }
-    return result.rows[0].value;
+    return result[0].value;
   }
 
   async has(key: PrimaryKey): Promise<boolean> {
@@ -231,7 +235,7 @@ class PostgresStore<T> {
     const pool = await this.getOrCreatePool();
     const result = await pool.query(
       `SELECT EXISTS (SELECT 1 FROM ${this.primaryTableName} WHERE key = $1)`, [key]);
-    return result.rows[0].exists;
+    return result[0].exists;
   }
 
   async set(key: PrimaryKey, value: T): Promise<void> {
@@ -276,50 +280,100 @@ class PostgresStore<T> {
   async del(key: PrimaryKey): Promise<void> {
     assertRuntime();
     const pool = await this.getOrCreatePool();
-    await pool.query(
-      `DELETE FROM ${this.primaryTableName} WHERE key = $1`, [key]);
+
+    const queries: { query: string, values: any[] }[] = [];
+
+    // Loop through the indexes and delete the related entries in the index tables
+    for (const { tableName } of this.indexes) {
+      queries.push({
+        query: `DELETE FROM ${tableName} WHERE key = $1;`,
+        values: [key]
+      });
+    }
+
+    // Delete from main table
+    queries.push({
+      query: `DELETE FROM ${this.primaryTableName} WHERE key = $1;`,
+      values: [key]
+    });
+
+    // Use a transaction to execute all the queries
+    await pool.tx(async t => {
+      const batch = queries.map(q => t.none(q.query, q.values));
+      await t.batch(batch);
+    });
   }
 
   async modify(key: PrimaryKey, fn: (value: T | undefined) => T | undefined): Promise<T | undefined> {
     assertRuntime();
     const pool = await this.getOrCreatePool();
 
-    // Start transaction
-    await pool.query('BEGIN');
+    let newValue: T | undefined;
+    const queries: { query: string, values: any[] }[] = [];
 
-    try {
-      // Retrieve the existing value
-      const result = await pool.query(
-        `SELECT value FROM ${this.primaryTableName} WHERE key = $1 FOR UPDATE`, [key]);
-      const existingValue = result.rows.length > 0 ? result.rows[0].value : undefined;
+    // Start a transaction and retrieve the current value
+    await pool.tx(async t => {
+      const result = await t.oneOrNone(
+        `SELECT value FROM ${this.primaryTableName} WHERE key = $1 FOR UPDATE`, [key]
+      );
+
+      const existingValue = result ? result.value : undefined;
 
       // Apply the modification function
-      const newValue = fn(existingValue);
+      newValue = fn(existingValue);
 
       if (newValue === undefined) {
         // Delete the record if the new value is undefined
-        await pool.query(`DELETE FROM ${this.primaryTableName} WHERE key = $1`, [key]);
+        queries.push({
+          query: `DELETE FROM ${this.primaryTableName} WHERE key = $1;`,
+          values: [key]
+        });
+
+        // Delete from index tables as well
+        for (const { tableName } of this.indexes) {
+          queries.push({
+            query: `DELETE FROM ${tableName} WHERE key = $1;`,
+            values: [key]
+          });
+        }
       } else {
         // Update the record
-        await pool.query(
-          `INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
-          ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1`,
-          [key, newValue]
-        );
+        queries.push({
+          query: `
+            INSERT INTO ${this.primaryTableName} (key, value) VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = $2 WHERE ${this.primaryTableName}.key = $1;
+          `,
+          values: [key, JSON.stringify(newValue)]
+        });
+
+        // Handle index tables
+        for (const { tableName, indexer } of this.indexes) {
+          // Delete old index entries
+          queries.push({
+            query: `DELETE FROM ${tableName} WHERE key = $1;`,
+            values: [key]
+          });
+
+          // Insert updated index entries
+          for (const { indexKey, inlineValue } of indexer(newValue)) {
+            queries.push({
+              query: `INSERT INTO ${tableName} (index_key, key, inline_value) VALUES ($1, $2, $3);`,
+              values: [indexKey, key, JSON.stringify(inlineValue)]
+            });
+          }
+        }
       }
 
-      // Commit the transaction
-      await pool.query('COMMIT');
-      return newValue;
+      // Execute the batched queries
+      const batch = queries.map(q => t.none(q.query, q.values));
+      await t.batch(batch);
+    });
 
-    } catch (error) {
-      // Something went wrong, rollback the transaction
-      await pool.query('ROLLBACK');
-      throw error;
-    }
+    return newValue;
   }
 
-  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
+
+  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey> {
     assertRuntime();
     const pool = await this.getOrCreatePool();
     const batchSize = opts?.batchSize || 100; // default batch size of 100 if not specified
@@ -341,7 +395,6 @@ class PostgresStore<T> {
         );
       }
 
-      assert(false, 'untested')
       const keys = result.map((row: any) => row.key) as PrimaryKey[];
 
       // If no more keys, then exit the loop
@@ -350,7 +403,7 @@ class PostgresStore<T> {
       }
 
       // Yield the batch of keys
-      yield keys;
+      yield* keys;
 
       // Remember the last key for the next query
       lastKey = keys[keys.length - 1];
@@ -465,7 +518,7 @@ class PostgresStore<T> {
   private async index_get(index: IndexInfo<T>, indexKey: IndexKey, opts?: IndexGetOpts): Promise<IndexEntry<T, any>[]> {
     assertRuntime();
 
-    const retrieveValues = opts?.retrieveValues ?? true;
+    const retrieveValues = opts?.retrieveValues ?? false;
     const retrieveInlineValues = opts?.retrieveInlineValues ?? true;
 
     // Construct the SQL query based on the options.
@@ -491,13 +544,18 @@ class PostgresStore<T> {
     const pool = await this.getOrCreatePool();
     const result = await pool.query(query, parameters);
 
-    return result.map((row: any) => ({
-      indexKey: row.index_key,
-      key: row.key,
-      value: retrieveValues ? row.value : undefined,
-      inlineValue: retrieveInlineValues && row.inline_value !== null
-        ? row.inline_value : undefined,
-    }));
+    return result.map((row: any) => {
+      const result: IndexEntry<T, any> = { key: row.key }
+      if (retrieveValues) result.value = row.value;
+      if (retrieveInlineValues) {
+        if (row.inline_value !== null) {
+          result.inlineValue = row.inline_value;
+        } else {
+          result.inlineValue = undefined;
+        }
+      }
+      return result;
+    });
   }
 
 }
@@ -638,11 +696,7 @@ class InMemoryStore<T> {
   // only guarantee is that all keys that existed at the start of the process,
   // that have not been deleted at any point during the process, will be
   // included in the result.
-  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey[]> {
-    const batchSize = opts?.batchSize ?? 100;
-    const keys = Array.from(this.data.keys());
-    for (let i = 0; i < keys.length; i += batchSize) {
-      yield keys.slice(i, i + batchSize);
-    }
+  async *allKeys(opts?: { batchSize?: number }): AsyncIterableIterator<PrimaryKey> {
+    yield* this.data.keys();
   }
 }

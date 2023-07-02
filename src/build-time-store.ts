@@ -11,7 +11,7 @@ import { BuildTimeFile } from "./build-time-file";
  */
 export class BuildTimeStore<T> {
   private file: BuildTimeFile
-  private contents: { [key: string]: T } = {};
+  private contents?: { [key: string]: T };
 
   constructor (public id: ID) {
     assertStartupTime();
@@ -32,25 +32,26 @@ export class BuildTimeStore<T> {
   get(key: ID): any {
     assertBuildTime();
     this.cacheContents();
-    return this.contents[key.value]
+    return this.contents![key.value]
   }
 
   set(key: ID, value: T): void {
     value = JSON.parse(JSON.stringify(value));
     assertBuildTime();
     this.cacheContents();
-    this.contents[key.value] = value;
+    this.contents![key.value] = value;
     this.flush();
   }
 
   has(key: ID): boolean {
     assertBuildTime();
     this.cacheContents();
-    return this.contents.hasOwnProperty(key.value);
+    return this.contents!.hasOwnProperty(key.value);
   }
 
   getOrInsert(key: ID, valueLazy: () => T): T {
     assertBuildTime();
+    this.cacheContents();
     if (this.has(key)) {
       return this.get(key);
     } else {
@@ -63,13 +64,13 @@ export class BuildTimeStore<T> {
   keys(): string[] {
     assertBuildTime();
     this.cacheContents();
-    return Object.keys(this.contents);
+    return Object.keys(this.contents!);
   }
 
   values(): T[] {
     assertBuildTime();
     this.cacheContents();
-    return Object.values(this.contents);
+    return Object.values(this.contents!);
   }
 
   private cacheContents() {
