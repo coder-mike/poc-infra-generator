@@ -1,14 +1,15 @@
 import { BuildTimeFile } from "./build-time-file";
 import { ID, rootId } from "./id";
-import { Persona, assertStartupTime, runningInProcess } from "./persona";
+import { Persona, assertRuntime, assertStartupTime, runningInProcess } from "./persona";
 import * as readline from 'readline';
 import { parseArgsStringToArgv } from 'string-argv';
 import path from 'path';
 import assert from "assert";
 import { BuildTimeValue, assertBuildTime } from "./build-time";
 import { secrets } from "./secret";
-import { gitIgnorePath } from "./build-git-ignore";
 import { teardown } from "./teardown";
+import os from 'os';
+import { spawn } from 'child_process';
 
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
@@ -29,14 +30,36 @@ type CliEntryPoint = (parsedArgs: ParsedArgs, rawArgs: string[]) => void | Promi
  * Defines a CLI of the distributed application.
  */
 export class CliCommand {
+  private batchFile: BuildTimeFile;
+  private bashFile: BuildTimeFile;
+
   constructor(
     public id: ID,
-    public command: string,
+    public commandName: string,
     public entryPoint: CliEntryPoint
   ) {
     assertStartupTime();
     registerCliCommand(this);
-    createRuntimeWrapper(id, this);
+    const { batchFile, bashFile } = createRuntimeWrapper(id, this);
+    this.batchFile = batchFile;
+    this.bashFile = bashFile;
+  }
+
+  /**
+   * Run the CLI command.
+   *
+   * If running in-process, this will parse the arguments and call the callback
+   * directly. If running in docker-compose, this will execute the generated
+   * shell script.
+   */
+  async run(...args: string[]) {
+    assertRuntime();
+    if (runningInProcess) {
+      const parsedArgs = parseCliArgs(args);
+      await this.entryPoint(parsedArgs, args);
+    } else {
+      await runCliInShell(args, this.batchFile, this.bashFile);
+    }
   }
 }
 
@@ -83,11 +106,11 @@ function registerCliCommand(cliCommand: CliCommand) {
     cliPersona = new Persona(rootId('cli'), 'cli', runCli);
   }
 
-  if (cliCommands[cliCommand.command]) {
-    throw new Error(`CLI command ${cliCommand.command} already registered`);
+  if (cliCommands[cliCommand.commandName]) {
+    throw new Error(`CLI command ${cliCommand.commandName} already registered`);
   }
 
-  cliCommands[cliCommand.command] = cliCommand;
+  cliCommands[cliCommand.commandName] = cliCommand;
 }
 
 async function runCli() {
@@ -224,8 +247,8 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
     runner = 'node';
   }
 
-  new BuildTimeFile(id`win`, {
-    filepath: `bin/${command.command}.bat`,
+  const batchFile = new BuildTimeFile(id`win`, {
+    filepath: `bin/${command.commandName}.bat`,
     content: `@echo off\nsetlocal\nset PERSONA=${
       persona.environmentVariableValue
     }\n\nREM Load environment variables from .env file\nfor /f "usebackq tokens=*" %%a in (\`%~dp0\.env\`) do set %%a\n\nREM Run the node script\ncall ${
@@ -235,8 +258,8 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
     }" %*`
   });
 
-  new BuildTimeFile(id`nix`, {
-    filepath: `bin/${command.command}`,
+  const bashFile = new BuildTimeFile(id`nix`, {
+    filepath: `bin/${command.commandName}`,
     content: `#!/bin/bash\n\nexport PERSONA=${
       persona.environmentVariableValue
     }\n\n# Load environment variables from .env file\nset -a\nsource "$(dirname "$0")/.env"\nset +a\n\n# Run the node script\n${
@@ -244,5 +267,62 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
     } "$(dirname "$0")/${
       entryScript
     }" "$@"`
+  });
+
+  return { batchFile, bashFile }
+}
+
+function runCliInShell(
+  args: string[],
+  batchFile: BuildTimeFile,
+  bashFile: BuildTimeFile,
+): Promise<{ stderr: string, stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const platform = os.platform();
+    let script: string;
+
+    // Determine script to run based on the OS
+    switch (platform) {
+      case 'win32':
+        script = batchFile.filepath;
+        break;
+      case 'linux':
+      case 'darwin': // macOS is darwin
+        script = bashFile.filepath;
+        break;
+      default:
+        reject(new Error(`Unsupported platform: ${platform}`));
+        return;
+    }
+
+    // Spawn the script
+    const child = spawn(script, args);
+
+    let stdout = '';
+    let stderr = '';
+
+    // Collect stdout
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    // Collect stderr
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    // Handle process completion
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Process exited with code ${code}\n${stderr}`));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    // Handle process error
+    child.on('error', (error) => {
+      reject(error);
+    });
   });
 }

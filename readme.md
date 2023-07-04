@@ -204,17 +204,83 @@ This is weaker than the snapshotting paradigm used in Microvium for two reasons:
 
 # Component Reference (High-level components)
 
-TODO
-
-## `ID`
-
 ## `Store`
+
+A key-value store for JSON values, with support for indexing. The store is implemented as a Postgres database when running on docker-compose and implemented as an in-memory store when running in-process.
+
+The store supports the following operations:
+
+- `store.get`: Get a value by key.
+- `store.set`: Set a value by key.
+- `store.has`: Check if a key exists.
+- `store.del`: Delete a value by key.
+- `store.modify`: Atomic read-modify-write operation.
+- `store.allKeys`: Get all keys in the store.
+- `new store.Index`: Define a new index on the store.
+
+### Indexes
+
+Example:
+
+```ts
+interface Message {
+  text: string;
+  from: string;
+  to: string;
+}
+
+// At startup
+assertStartupTime();
+const store = new Store<Message>(id`store`)
+// Let's say we want to index by the `from` field
+const index = new store.Index(id`index`, (value) => [{
+  indexKey: value.from,
+  // Inline the `to` value in the index for quick access (optional)
+  inlineValue: value.to,
+}]);
+
+// ...
+
+// Later, at runtime
+assertRuntime();
+// Get all messages from Alice
+const fromAlice = await fromIndex.get('Alice');
+console.log(fromAlice.map(m => `message from ${m.indexKey} to ${m.inlineValue}`));
+```
+
+Under the hood, indexes work by creating a separate table in the database for each index and keeping it in sync with the main table.
+
 
 ## `CliCommand`
 
+Register a new CLI command with `new CliCommand(id, name, entrypointCallback)`.
+
+When running in-process, the application will enter an interactive REPL loop where it accepts commands from the user and dispatches them to the corresponding `entrypointCallback` by name.
+
+When running in docker-compose, all the CliCommands are generated as independent shell scripts with access to the shared secrets (passwords, host names, and port numbers) necessary to connect to other components of the system (e.g. stores and API servers).
+
+You can invoke a `CliCommand` with `command.run()`. If running in-process, this will parse the arguments and call the callback directly. If running in docker-compose, this will execute the generated shell script.
+
+
 ## `ApiServer`
 
+An HTTP server to expose an API.
+
+Call `apiServer.defineEndpoint` to register a new handler for a particular endpoint route. You can optionally specify which HTTP method to use (e.g. `GET` or `POST`).
+
+The return value from `defineEndpoint` is a function that you can call to make a request to the endpoint from a client. If running in-process, this will call the handler directly. If running in docker-compose, this will make an HTTP request to the generated API server using axios.
+
+If running in-process, there is no actual HTTP server. Instead, the API server is implemented as a set of functions that you can call directly. This is useful for testing and debugging. If running in docker-compose, the API server is implemented as an express.js HTTP server in its own docker container.
+
+
 ## `Worker`
+
+`const worker = new Worker(id, callback, opts)`
+
+A worker represents a long-running background process. If the system is in in-process mode, the worker is executed as a direct call to the callback at startup. If the system is in docker-compose mode, the worker is instantiated as a separate docker container and the callback is called when the docker container starts.
+
+For example, the `Worker` component is the basis of the `ApiServer` component, where the `callback` starts an express.js server.
+
 
 # Epoch Assertions
 

@@ -3,7 +3,7 @@ import { Worker } from "./worker";
 import { assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import express, { Request, Response, NextFunction } from 'express';
 import { json } from 'body-parser';
-import axios, { AxiosResponse } from 'axios';
+import axios from 'axios';
 import { Port } from "./port";
 
 export type HttpEndpointHandler<T, U> = (payload: T) => Promise<U>;
