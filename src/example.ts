@@ -1,4 +1,4 @@
-import { rootId, Store, ApiServer, ID, run, Worker } from '..';
+import { rootId, Store, ApiServer, ID, run, Worker } from './index';
 
 interface Customer {
   id: string;
