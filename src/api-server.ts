@@ -3,7 +3,7 @@ import { Worker } from "./worker";
 import { assertStartupTime, currentPersona, runningInProcess } from "./persona";
 import express, { Request, Response, NextFunction } from 'express';
 import { json } from 'body-parser';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { Port } from "./port";
 
 export type HttpEndpointHandler<T, U> = (payload: T) => Promise<U>;
@@ -47,7 +47,7 @@ export class ApiServer {
       // endpoint via HTTP. This will be set up on startup in the docker
       // container.
 
-      route = typeof route === 'string' ? route : idToUriPath(route);
+      route = typeof route === 'string' ? route : `/${idToUriPath(route)}`;
       const method = opts?.method ?? 'POST';
       const endpointInfo: EndpointInfo = { route, handler, method };
       this.endpoints.push(endpointInfo);
@@ -62,15 +62,6 @@ function setupExpressServer(endpoints: EndpointInfo[], port: Port) {
 
   // Middleware for parsing JSON bodies
   app.use(json());
-
-  // Error handling middleware
-  app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-    if (res.headersSent) {
-      return next(err);
-    }
-    res.status(500);
-    res.json({ error: err.message });
-  });
 
   // Register all endpoints
   for (const endpoint of endpoints) {
@@ -93,9 +84,18 @@ function setupExpressServer(endpoints: EndpointInfo[], port: Port) {
     });
   }
 
+  // Error handling middleware
+  app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+    console.error(err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    res.status(500).json({ error: err.message });
+  });
+
   // Start the server
   app.listen(port.get(), () => {
-      console.log(`Server listening at http://localhost:${port}`);
+      console.log(`Server listening at http://localhost:${port.get()}`);
   });
 }
 
@@ -109,11 +109,22 @@ function clientWrapper({ route, method: verb }: EndpointInfo, host: string, port
     // hostname (running in docker-compose).
     const hostName = (currentPersona?.host === 'cli-command') ? 'localhost' : host;
     const url = `http://${hostName}:${port.get()}${route}`;
-    const response = await axios.request({
-      url,
-      method: verb,
-      data: payload,
-    });
-    return response.data;
+    try {
+      const response = await axios.request({
+        url,
+        method: verb,
+        data: payload,
+      });
+      return response.data;
+    } catch (e) {
+      if (e instanceof AxiosError && e.response?.data?.error) {
+        // The server gets the error message and puts it in the 500 response. We
+        // can re-throw here to give a more intelligent error message than the
+        // generic AxiosError which is very verbose.
+        throw new Error('Server responded with error: ' + e.response.data.error);
+      } else {
+        throw e;
+      }
+    }
   }
 }

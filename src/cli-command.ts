@@ -14,6 +14,11 @@ import { spawn } from 'child_process';
 const cliCommands: Record<string, CliCommand> = {};
 let cliPersona: Persona | undefined;
 
+export interface ParsedArgs {
+  named: Record<string, any>,
+  positional: string[],
+}
+
 /**
  * Entry point for a CLI command.
  *
@@ -181,11 +186,6 @@ function listCommands() {
   }
 }
 
-export type ParsedArgs = {
-  named: Record<string, any>,
-  positional: string[],
-};
-
 function parseCliArgs(args: string[]): ParsedArgs {
   const named: Record<string, string | true> = {};
   const positional: string[] = [];
@@ -251,7 +251,7 @@ function createRuntimeWrapper(id: ID, command: CliCommand) {
     filepath: `bin/${command.commandName}.bat`,
     content: `@echo off\nsetlocal\nset PERSONA=${
       persona.environmentVariableValue
-    }\n\nREM Load environment variables from .env file\nfor /f "usebackq tokens=*" %%a in (\`%~dp0\.env\`) do set %%a\n\nREM Run the node script\ncall ${
+    }\n\nREM Load environment variables from .env file\nfor /f "usebackq tokens=1,2 delims==" %%a in ("%~dp0.env") do set %%a=%%b\n\nREM Run the node script\ncall ${
       runner
     } "%~dp0${
       entryScript.replace(/\//g, '\\')
@@ -303,11 +303,13 @@ function runCliInShell(
 
     // Collect stdout
     child.stdout.on('data', (data) => {
+      process.stdout.write(data);
       stdout += data.toString();
     });
 
     // Collect stderr
     child.stderr.on('data', (data) => {
+      process.stderr.write(data);
       stderr += data.toString();
     });
 
