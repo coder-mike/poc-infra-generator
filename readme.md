@@ -1,6 +1,7 @@
 # Proof of concept: Infra Generator
 
 Author: Michael Hunter
+
 License: MIT
 
 Infra Generator is a proof-of-concept library designed to streamline the creation and orchestration of distributed systems. Through its versatile architecture, developers can efficiently encapsulate components, leverage dependency injection, and maintain type-safety. The library provides tools to programmatically define infrastructure configuration, server logic, and client logic, while automatically generating necessary Docker and Docker Compose files to seamlessly deploy multiple architectural components.
